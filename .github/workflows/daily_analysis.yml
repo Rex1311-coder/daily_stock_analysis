@@ -1,3 +1,4 @@
+
 name: 每日股票分析
 
 on:
@@ -55,7 +56,73 @@ jobs:
       - name: 创建必要目录
         run: |
           mkdir -p data logs reports
-      
+      - name: 创建必要目录                    # ← 第 75 行
+        run: |
+          mkdir -p data logs reports          # ← 第 76-77 行
+                                               # ← 第 78 行（空行）
+      # ⬇️ ⬇️ ⬇ 在下面这行之前插入 ⬇️ ⬇️ ⬇️
+      - name: 执行股票分析                    # ← 第 80 行
+操作： 在第 78 行空行处，粘贴下面这段代码：
+
+yaml
+      # ============================================
+      # 🔧 测试 API 连接（新增）
+      # ============================================
+      - name: Test API connectivity
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ANSPIRE_API_KEYS: ${{ secrets.ANSPIRE_API_KEYS }}
+        run: |
+          echo "========================================="
+          echo "  🔍 测试 API 连接"
+          echo "========================================="
+          
+          ANSPIRE_KEY=$(echo "$ANSPIRE_API_KEYS" | cut -d',' -f1)
+          
+          echo ""
+          echo "【1/2】测试 DeepSeek 官方 API..."
+          if [ -z "$DEEPSEEK_API_KEY" ]; then
+            echo "⚠️  DEEPSEEK_API_KEY 未配置，跳过测试"
+          else
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://api.deepseek.com/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
+              -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"回复OK"}],"max_tokens":5}' \
+              --connect-timeout 15 --max-time 30)
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ DeepSeek 官方: 连接成功 (HTTP $HTTP_CODE)"
+            else
+              echo "❌ DeepSeek 官方: 连接失败 (HTTP $HTTP_CODE)"
+              echo "   错误: $(echo $BODY | head -c 200)"
+            fi
+          fi
+          
+          echo ""
+          echo "【2/2】测试 Anspire 中转 API..."
+          if [ -z "$ANSPIRE_KEY" ]; then
+            echo "⚠️  ANSPIRE_API_KEYS 未配置，跳过测试"
+          else
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://api.anspire.cn/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $ANSPIRE_KEY" \
+              -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"回复OK"}],"max_tokens":5}' \
+              --connect-timeout 15 --max-time 30)
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ Anspire 中转: 连接成功 (HTTP $HTTP_CODE)"
+            else
+              echo "❌ Anspire 中转: 连接失败 (HTTP $HTTP_CODE)"
+              echo "   错误: $(echo $BODY | head -c 200)"
+            fi
+          fi
+          
+          echo ""
+          echo "========================================="
+          echo "  🔍 测试完毕"
+          echo "========================================="
       - name: 执行股票分析
         env:
           # ==========================================
@@ -474,6 +541,23 @@ jobs:
           echo "=========================================="
           echo "📊 分析完成"
           echo "=========================================="
+            echo ""
+          echo "【环境变量自检】"
+          echo "DEEPSEEK_API_KEY: $([ -n "$DEEPSEEK_API_KEY" ] && echo '✅ 已设置' || echo '❌ 未设置')"
+          echo "ANSPIRE_API_KEYS: $([ -n "$ANSPIRE_API_KEYS" ] && echo '✅ 已设置' || echo '❌ 未设置')"
+          echo ""
+          
+          if [ -d "reports" ] && [ "$(ls -A reports 2>/dev/null)" ]; then
+            echo "生成的报告:"
+            ls -la reports/
+          else
+            echo "⚠️ 未生成报告文件"
+          fi
+          echo ""
+          if [ -f "logs/stock_analysis_$(date +%Y%m%d).log" ]; then
+            echo "📜 最近日志（最后 30 行）:"
+            tail -30 logs/stock_analysis_*.log 2>/dev/null || echo "无日志"
+          fi
           if [ -d "reports" ] && [ "$(ls -A reports 2>/dev/null)" ]; then
             echo "生成的报告:"
             ls -la reports/
