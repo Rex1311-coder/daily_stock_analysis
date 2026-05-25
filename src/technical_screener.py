@@ -1,5 +1,5 @@
 """
-技术指标批量计算器 - 优化版（批量K线 + 缓存）
+技术指标批量计算器 - 缓存版
 """
 import pandas as pd
 import numpy as np
@@ -22,25 +22,18 @@ class TechnicalScreener:
         self._init_db()
 
     def _init_db(self):
-        """初始化K线缓存数据库"""
         os.makedirs("data", exist_ok=True)
         with sqlite3.connect(self._db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS kline (
-                    code TEXT,
-                    date TEXT,
-                    open REAL,
-                    high REAL,
-                    low REAL,
-                    close REAL,
-                    volume REAL,
+                    code TEXT, date TEXT, open REAL, high REAL,
+                    low REAL, close REAL, volume REAL,
                     PRIMARY KEY (code, date)
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON kline(code)")
 
     def _load_cache_batch(self, codes: List[str]):
-        """批量从缓存加载K线"""
         if not codes:
             return
         placeholders = ','.join(['?' for _ in codes])
@@ -55,50 +48,34 @@ class TechnicalScreener:
                 self._kline_cache[code] = df[df['code'] == code].sort_values('date')
 
     def _save_cache_batch(self, data: dict):
-        """批量保存K线到缓存"""
         rows = []
         for code, df in data.items():
             if df is None or df.empty:
                 continue
             for _, row in df.iterrows():
                 rows.append((
-                    code,
-                    str(row['date'])[:10],
-                    float(row['open']),
-                    float(row['high']),
-                    float(row['low']),
-                    float(row['close']),
+                    code, str(row['date'])[:10],
+                    float(row['open']), float(row['high']),
+                    float(row['low']), float(row['close']),
                     float(row['volume']),
                 ))
         if rows:
             with sqlite3.connect(self._db_path) as conn:
-                conn.executemany(
-                    "INSERT OR REPLACE INTO kline VALUES (?,?,?,?,?,?,?)",
-                    rows
-                )
+                conn.executemany("INSERT OR REPLACE INTO kline VALUES (?,?,?,?,?,?,?)", rows)
 
     def batch_calculate(self, stock_list: List[Dict]) -> List[Dict]:
         if not stock_list:
             return []
-        
         logger.info(f"批量技术指标: {len(stock_list)} 只")
         codes = [s['code'].zfill(6) for s in stock_list]
-        
-        # 1. 从缓存加载
-        logger.info("从缓存加载K线...")
         self._load_cache_batch(codes)
-        cached = len(self._kline_cache)
-        logger.info(f"缓存命中: {cached}/{len(codes)} 只")
-        
-        # 2. 获取未缓存的K线
+        logger.info(f"缓存命中: {len(self._kline_cache)}/{len(codes)} 只")
         uncached = [c for c in codes if c not in self._kline_cache]
         if uncached:
-            logger.info(f"获取 {len(uncached)} 只K线数据...")
+            logger.info(f"获取 {len(uncached)} 只K线...")
             new_data = self._fetch_kline_batch(uncached)
             self._kline_cache.update(new_data)
             self._save_cache_batch(new_data)
-        
-        # 3. 并行计算指标
         logger.info("计算技术指标...")
         results = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -110,23 +87,19 @@ class TechnicalScreener:
                         results.append(r)
                 except:
                     pass
-                if (i + 1) % 200 == 0:
+                if (i + 1) % 100 == 0:
                     logger.info(f"进度: {i+1}/{len(stock_list)}")
-        
         logger.info(f"完成: {len(results)} 只")
         return results
 
     def _fetch_kline_batch(self, codes: List[str]) -> dict:
-        """批量获取K线数据"""
         result = {}
-        batch_size = 50
-        for i in range(0, len(codes), batch_size):
-            batch = codes[i:i+batch_size]
+        for i in range(0, len(codes), 50):
+            batch = codes[i:i+50]
             try:
                 import akshare as ak
                 end = datetime.now().strftime('%Y%m%d')
                 start = (datetime.now() - timedelta(days=180)).strftime('%Y%m%d')
-                
                 for code in batch:
                     try:
                         df = ak.stock_zh_a_hist(
@@ -142,64 +115,58 @@ class TechnicalScreener:
                             result[code] = df
                     except:
                         pass
-                
-                logger.info(f"批量获取: {i+1}-{min(i+batch_size, len(codes))}/{len(codes)}")
+                logger.info(f"批量获取: {i+1}-{min(i+50, len(codes))}/{len(codes)}")
             except:
                 pass
-        
         return result
 
-        def _calc(self, stock: Dict) -> Dict:
+    def _calc(self, stock: Dict) -> Dict:
         code = stock['code'].zfill(6)
         df = self._kline_cache.get(code)
-        
         if df is None or len(df) < 20:
             return None
-        
-        # 确保列存在
+
         if 'close' not in df.columns:
             if '收盘' in df.columns:
-                df = df.rename(columns={'收盘': 'close', '开盘': 'open', '最高': 'high', '最低': 'low', '成交量': 'volume'})
+                df = df.rename(columns={
+                    '收盘': 'close', '开盘': 'open',
+                    '最高': 'high', '最低': 'low', '成交量': 'volume'
+                })
             else:
                 return None
-        
-        # 确保是数值
+
         for col in ['close', 'high', 'low', 'volume']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-        
+
         close = df['close'].values
         high = df['high'].values
         low = df['low'].values
         volume = df['volume'].values
         latest_price = float(stock['price'])
-        
-        # 均线
+
         ma5 = self._ma(close, 5)[-1]
         ma10 = self._ma(close, 10)[-1]
         ma20 = self._ma(close, 20)[-1]
         ma60 = self._ma(close, 60)[-1] if len(close) >= 60 else ma20
-        
+
         is_bullish = ma5 > ma10 > ma20
         ma_score = 30 if (ma5 > ma10 > ma20 > ma60) else (20 if is_bullish else (10 if latest_price > ma20 else 0))
         dist_ma20 = (latest_price - ma20) / ma20 * 100 if ma20 > 0 else 0
-        
-        # MACD
+
         macd, signal, hist = self._macd(close)
         macd_score = 25 if (macd[-1] > 0 and macd[-1] > signal[-1] and hist[-1] > hist[-2]) else \
                      (15 if macd[-1] > signal[-1] else (8 if hist[-1] > hist[-2] else 0))
-        
-        # RSI
+
         rsi = self._rsi(close, 14)[-1]
         rsi_score = 20 if 25 <= rsi < 30 else (15 if 30 <= rsi <= 70 else (10 if rsi < 25 else 5))
-        
-        # 量价
+
         vol_ma5 = self._ma(volume, 5)[-1]
         vol_ratio = volume[-1] / vol_ma5 if vol_ma5 > 0 else 1
         vol_score = 15 if 1.2 <= vol_ratio <= 2.5 else (8 if 0.8 <= vol_ratio <= 1.2 else 3)
-        
+
         total = ma_score + macd_score + rsi_score + vol_score
-        
+
         stock.update({
             'ma5': round(ma5, 2), 'ma10': round(ma10, 2),
             'ma20': round(ma20, 2), 'ma60': round(ma60, 2),
