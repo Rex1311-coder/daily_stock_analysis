@@ -47,7 +47,13 @@ class AIRanker:
 MA5/20/60:{stock.get('ma5')}/{stock.get('ma20')}/{stock.get('ma60')} RSI:{stock.get('rsi')}
 返回:{{"action":"buy/hold/sell","score":0-100,"confidence":0-100,"reason":"15字内","risk":"低/中/高"}}"""
             
-            resp = self.analyzer.generate_text(prompt, max_tokens=200)
+           import litellm
+            resp = litellm.completion(
+                model="deepseek/deepseek-chat",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=200,
+            )
+            resp = resp.choices[0].message.content if resp else ""
             if not resp:
                 return None
             
