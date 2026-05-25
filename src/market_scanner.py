@@ -17,27 +17,54 @@ class MarketScanner:
     def __init__(self):
         self.all_stocks = None
         self.filtered_stocks = None
-    
-    def fetch_all_stocks(self) -> pd.DataFrame:
-        """获取全 A 股实时行情"""
+        def fetch_all_stocks(self) -> pd.DataFrame:
+        """获取全 A 股实时行情（新浪接口 + 东财备用）"""
         try:
             import akshare as ak
             
             logger.info("正在获取全 A 股实时行情...")
+            df = None
             
-            for attempt in range(3):
-                try:
-                    df = ak.stock_zh_a_spot_em()
-                    if not df.empty:
-                        break
-                except Exception as e:
-                    if attempt < 2:
-                        logger.warning(f"东财接口第{attempt+1}次失败，重试中...")
-                        time.sleep(5)
-                    else:
-                        raise e
+            # 方案1：新浪接口（海外可用）
+            try:
+                logger.info("尝试新浪接口...")
+                df = ak.stock_zh_a_spot()
+                if df is not None and not df.empty:
+                    logger.info(f"新浪接口成功: {len(df)} 只")
+                else:
+                    df = None
+            except Exception as e:
+                logger.warning(f"新浪接口失败: {e}")
             
-            logger.info(f"获取到 {len(df)} 只股票")
+            # 方案2：东财接口（备用）
+            if df is None or df.empty:
+                logger.info("尝试东财接口...")
+                for attempt in range(2):
+                    try:
+                        df = ak.stock_zh_a_spot_em()
+                        if df is not None and not df.empty:
+                            logger.info(f"东财接口成功: {len(df)} 只")
+                            break
+                    except Exception as e:
+                        logger.warning(f"东财接口第{attempt+1}次失败: {e}")
+                        import time
+                        time.sleep(3)
+            
+            if df is None or df.empty:
+                logger.error("所有接口均失败")
+                return pd.DataFrame()
+            
+            # 补充量比（腾讯接口）
+            try:
+                df_tencent = ak.stock_zh_a_spot()
+                if '量比' in df_tencent.columns:
+                    df = df.set_index('代码') if '代码' in df.columns else df
+                    df_tencent = df_tencent.set_index('代码')
+                    df['量比'] = df_tencent['量比']
+                    df = df.reset_index()
+            except:
+                pass
+            
             self.all_stocks = df
             return df
             
