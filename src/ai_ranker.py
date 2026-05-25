@@ -12,8 +12,12 @@ logger = logging.getLogger(__name__)
 
 class AIRanker:
     
-    def __init__(self, analyzer, max_workers: int = 3):
+     def __init__(self, analyzer, max_workers: int = 3):
         self.analyzer = analyzer
+        if self.analyzer is None:
+            import os
+            import litellm
+            litellm.api_key = os.environ.get("DEEPSEEK_API_KEY")
         self.max_workers = max_workers
     
     def batch_analyze(self, stocks: List[Dict]) -> List[Dict]:
