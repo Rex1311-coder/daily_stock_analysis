@@ -1,5 +1,5 @@
 """
-全市场股票扫描器 - 稳定版
+全市场股票扫描器 - 优化版
 """
 import pandas as pd
 import numpy as np
@@ -43,44 +43,46 @@ class MarketScanner:
         initial = len(df)
         logger.info(f"筛选前: {initial} 只")
 
-        # 列名映射
+        # 重命名
         df = df.rename(columns={
-            '最新价': 'price', '涨跌幅': 'change_pct',
-            '成交量': 'volume', '成交额': 'amount',
-            '代码': 'code', '名称': 'name',
+            'changepercent': 'change_pct', 'trade': 'price',
+            'turnoverratio': 'turnover', 'per': 'pe', 'mktcap': 'market_cap',
+            '代码': 'code', '名称': 'name', '最新价': 'price',
+            '涨跌幅': 'change_pct', '成交量': 'volume', '换手率': 'turnover',
         })
 
-        # 填充缺失列
-        for col in ['code', 'name', 'price', 'change_pct', 'volume']:
+        # 确保列存在
+        for col in ['code', 'name', 'price', 'change_pct']:
             if col not in df.columns:
-                df[col] = 0 if col != 'name' else ''
+                df[col] = 0
+        if 'volume' not in df.columns:
+            df['volume'] = 0
+        if 'turnover' not in df.columns:
+            df['turnover'] = 0
 
-        # 转数值
-        df['price'] = pd.to_numeric(df['price'], errors='coerce').fillna(0)
-        df['change_pct'] = pd.to_numeric(df['change_pct'], errors='coerce').fillna(0)
-        df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
-
-        # 筛选
+        # 排除 ST
         df = df[~df['name'].astype(str).str.contains('ST|退市|N |C ', na=False)]
+
+        # 排除停牌
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
         df = df[df['volume'] > 0]
-        df = df[(df['change_pct'] > -3) & (df['change_pct'] < 10)]
-        df = df[df['price'] >= 5]
 
-        # 成交额筛选
-        if 'amount' in df.columns:
-            df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
-            df = df[df['amount'] >= 10000000]
+        # 涨跌幅放宽到 -5% ~ +15%
+        df['change_pct'] = pd.to_numeric(df['change_pct'], errors='coerce')
+        df = df[(df['change_pct'] > -5) & (df['change_pct'] < 15)]
 
-        # 限制数量
-        if len(df) > 300:
-            if 'amount' in df.columns:
-                df = df.nlargest(300, 'amount')
-            else:
-                df = df.nlargest(300, 'volume')
+        # 换手率放宽到 0.3% ~ 35%
+        df['turnover'] = pd.to_numeric(df['turnover'], errors='coerce')
+        df = df[(df['turnover'] >= 0.3) & (df['turnover'] <= 35)]
 
+        # 价格 > 2 元
+        df['price'] = pd.to_numeric(df['price'], errors='coerce')
+        df = df[df['price'] >= 2]
+
+        df['volume_ratio'] = 1.0
         df['scan_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.filtered_stocks = df
-        logger.info(f"筛选后: {len(df)} 只")
+        logger.info(f"筛选后: {len(df)} 只 (剔除{initial-len(df)}只)")
         return df
 
     def get_stock_list(self) -> List[Dict]:
@@ -98,8 +100,8 @@ class MarketScanner:
                 'change_pct': round(float(row.get('change_pct', 0)), 2),
                 'volume': float(row.get('volume', 0)),
                 'amount': float(row.get('amount', 0)),
-                'turnover': 0,
-                'market_cap': 0,
+                'turnover': round(float(row.get('turnover', 0)), 2),
+                'market_cap': float(row.get('market_cap', 0)),
                 'volume_ratio': 1.0,
             })
         return stocks
