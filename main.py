@@ -1098,8 +1098,3 @@ async def run_closing_push():
         logger.info("飞书推送成功")
     except Exception as e:
         logger.error(f"飞书推送失败: {e}")
-Commit changes
-
-
-if __name__ == "__main__":
-    sys.exit(main())
