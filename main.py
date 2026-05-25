@@ -35,13 +35,22 @@ setup_env()
 
 # 代理配置 - 通过 USE_PROXY 环境变量控制，默认关闭
 # GitHub Actions 环境自动跳过代理配置
-if os.getenv("GITHUB_ACTIONS") != "true" and os.getenv("USE_PROXY", "false").lower() == "true":
+IS_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS", "false").lower() == "true"
+
+if not IS_GITHUB_ACTIONS and os.getenv("USE_PROXY", "false").lower() == "true":
     # 本地开发环境，启用代理（可在 .env 中配置 PROXY_HOST 和 PROXY_PORT）
     proxy_host = os.getenv("PROXY_HOST", "127.0.0.1")
     proxy_port = os.getenv("PROXY_PORT", "10809")
     proxy_url = f"http://{proxy_host}:{proxy_port}"
     os.environ["http_proxy"] = proxy_url
     os.environ["https_proxy"] = proxy_url
+    print(f"[INFO] 已启用代理: {proxy_host}:{proxy_port}")
+else:
+    # GitHub Actions 环境，确保无代理
+    os.environ.pop("http_proxy", None)
+    os.environ.pop("https_proxy", None)
+    if IS_GITHUB_ACTIONS:
+        print("[INFO] GitHub Actions 环境，已禁用代理")
 
 import argparse
 import logging
