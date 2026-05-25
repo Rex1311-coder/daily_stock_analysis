@@ -1044,8 +1044,8 @@ async def run_intraday_scan():
         logger.info(f"[3/5] 技术指标计算 ({len(stock_list)} 只)...")
         screener = TechnicalScreener(max_workers=10)
         stocks = screener.batch_calculate(stock_list)
-        top_stocks = screener.filter_top_stocks(stocks, top_n=100)
-        logger.info(f"✅ 技术Top100: {len(top_stocks)} 只")
+        top_stocks = screener.filter_top_stocks(stocks, top_n=50)
+        logger.info(f"✅ 技术Top50: {len(top_stocks)} 只")
         
         if not top_stocks:
             logger.warning("⚠️ 技术筛选无结果")
