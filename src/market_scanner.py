@@ -89,11 +89,11 @@ class MarketScanner:
 
         if 'change_pct' in df.columns:
             df['change_pct'] = pd.to_numeric(df['change_pct'], errors='coerce')
-            df = df[(df['change_pct'] > -3) & (df['change_pct'] < 10)]
+            df = df[(df['change_pct'] > -5) & (df['change_pct'] < 15)]
 
         if has_turnover:
             df['turnover'] = pd.to_numeric(df['turnover'], errors='coerce')
-            df = df[(df['turnover'] >= 0.5) & (df['turnover'] <= 30)]
+            df = df[(df['turnover'] >= 0.3) & (df['turnover'] <= 35)]
         else:
             df['turnover'] = 0
 
