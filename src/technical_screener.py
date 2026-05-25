@@ -149,12 +149,24 @@ class TechnicalScreener:
         
         return result
 
-    def _calc(self, stock: Dict) -> Dict:
+        def _calc(self, stock: Dict) -> Dict:
         code = stock['code'].zfill(6)
         df = self._kline_cache.get(code)
         
         if df is None or len(df) < 20:
             return None
+        
+        # 确保列存在
+        if 'close' not in df.columns:
+            if '收盘' in df.columns:
+                df = df.rename(columns={'收盘': 'close', '开盘': 'open', '最高': 'high', '最低': 'low', '成交量': 'volume'})
+            else:
+                return None
+        
+        # 确保是数值
+        for col in ['close', 'high', 'low', 'volume']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
         
         close = df['close'].values
         high = df['high'].values
