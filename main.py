@@ -1002,8 +1002,8 @@ async def run_intraday_scan():
     """盘中实时扫描模式"""
     global analyzer
     if 'analyzer' not in globals():
-        from src.analyzer import Analyzer
-        analyzer = Analyzer()
+        from src.analyzer import StockAnalyzer
+        analyzer = StockAnalyzer()
     
     from src.market_scanner import MarketScanner
     from src.technical_screener import TechnicalScreener
