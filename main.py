@@ -1000,8 +1000,12 @@ def main() -> int:
 
 async def run_intraday_scan():
     """盘中实时扫描模式"""
-    global analyzer
-    analyzer = None
+    import sys
+    import os
+    from datetime import datetime
+    import logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+    logger = logging.getLogger(__name__)
     
     from src.market_scanner import MarketScanner
     from src.technical_screener import TechnicalScreener
@@ -1015,50 +1019,73 @@ async def run_intraday_scan():
     logger.info("=" * 60)
     
     try:
+        # [1/5] 获取全市场股票
         logger.info("[1/5] 获取全市场股票...")
         scanner = MarketScanner()
         df = scanner.fetch_all_stocks()
-        if df.empty:
-            logger.error("获取全市场股票失败")
+        
+        if df is None or df.empty:
+            logger.error("❌ 获取全市场股票失败")
             return None
         
+        logger.info(f"✅ 获取成功: {len(df)} 只")
+        
+        # [2/5] 快速筛选
         logger.info("[2/5] 快速筛选...")
         df = scanner.quick_filter(df)
         stock_list = scanner.get_stock_list()
-        logger.info(f"筛选后: {len(stock_list)} 只")
+        logger.info(f"✅ 筛选后: {len(stock_list)} 只")
+        
         if not stock_list:
+            logger.warning("⚠️ 筛选后无股票")
             return None
         
+        # [3/5] 技术指标
         logger.info(f"[3/5] 技术指标计算 ({len(stock_list)} 只)...")
         screener = TechnicalScreener(max_workers=10)
         stocks = screener.batch_calculate(stock_list)
         top_stocks = screener.filter_top_stocks(stocks, top_n=100)
-        logger.info(f"技术Top100: {len(top_stocks)} 只")
+        logger.info(f"✅ 技术Top100: {len(top_stocks)} 只")
         
-        logger.info(f"[4/5] AI 深度分析 ({len(top_stocks)} 只)...")
-        ranker = AIRanker(analyzer, max_workers=3)
+        if not top_stocks:
+            logger.warning("⚠️ 技术筛选无结果")
+            return None
+        
+        # [4/5] AI分析
+        logger.info(f"[4/5] AI深度分析 ({len(top_stocks)} 只)...")
+        ranker = AIRanker(None, max_workers=10)
         analyzed = ranker.batch_analyze(top_stocks)
         recommendations = ranker.get_top_recommendations(analyzed, top_n=20)
-        logger.info(f"推荐: {len(recommendations)} 只")
+        logger.info(f"✅ 推荐: {len(recommendations)} 只")
         
+        # [5/5] 保存
         logger.info("[5/5] 保存结果...")
         store = RecommendationStore()
         scan_time = scan_start.strftime('%Y-%m-%d %H:%M')
         store.save_batch(recommendations, scan_time)
         store.export_csv()
         
+        # 生成报告
         report = _gen_report(recommendations, scan_time)
+        os.makedirs("reports", exist_ok=True)
         path = f"reports/recommend_{scan_start.strftime('%Y%m%d_%H%M')}.md"
         with open(path, 'w', encoding='utf-8') as f:
             f.write(report)
         
+        logger.info(f"📄 报告: {path}")
+        
         elapsed = (datetime.now() - scan_start).total_seconds()
+        logger.info("=" * 60)
         logger.info(f"✅ 完成! 耗时 {elapsed:.0f}s, 推荐 {len(recommendations)} 只")
+        logger.info("=" * 60)
+        
         return recommendations
+        
     except Exception as e:
-        logger.error(f"扫描异常: {e}", exc_info=True)
+        logger.error(f"❌ 扫描异常: {e}")
+        import traceback
+        traceback.print_exc()
         return None
-
 
 def _gen_report(recommendations, scan_time):
     if not recommendations:
