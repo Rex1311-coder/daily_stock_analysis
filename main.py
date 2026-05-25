@@ -994,6 +994,182 @@ def main() -> int:
         logger.exception(f"程序执行失败: {e}")
         return 1
 
+# ============================================================
+# 盘中实时扫描功能
+# ============================================================
 
+async def run_intraday_scan():
+    """盘中实时扫描模式"""
+    from src.market_scanner import MarketScanner
+    from src.technical_screener import TechnicalScreener
+    from src.ai_ranker import AIRanker
+    from src.recommendation_store import RecommendationStore
+    
+    scan_start = datetime.now()
+    logger.info("=" * 60)
+    logger.info("🚀 盘中实时扫描启动")
+    logger.info(f"⏰ {scan_start.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 60)
+    
+    try:
+        logger.info("[1/5] 获取全市场股票...")
+        scanner = MarketScanner()
+        df = scanner.fetch_all_stocks()
+        if df.empty:
+            logger.error("获取全市场股票失败")
+            return None
+        
+        logger.info("[2/5] 快速筛选...")
+        df = scanner.quick_filter(df)
+        stock_list = scanner.get_stock_list()
+        logger.info(f"筛选后: {len(stock_list)} 只")
+        if not stock_list:
+            return None
+        
+        logger.info(f"[3/5] 技术指标计算 ({len(stock_list)} 只)...")
+        screener = TechnicalScreener(max_workers=10)
+        stocks = screener.batch_calculate(stock_list)
+        top_stocks = screener.filter_top_stocks(stocks, top_n=100)
+        logger.info(f"技术Top100: {len(top_stocks)} 只")
+        
+        logger.info(f"[4/5] AI 深度分析 ({len(top_stocks)} 只)...")
+        ranker = AIRanker(analyzer, max_workers=3)
+        analyzed = ranker.batch_analyze(top_stocks)
+        recommendations = ranker.get_top_recommendations(analyzed, top_n=20)
+        logger.info(f"推荐: {len(recommendations)} 只")
+        
+        logger.info("[5/5] 保存结果...")
+        store = RecommendationStore()
+        scan_time = scan_start.strftime('%Y-%m-%d %H:%M')
+        store.save_batch(recommendations, scan_time)
+        store.export_csv()
+        
+        report = _gen_report(recommendations, scan_time)
+        path = f"reports/recommend_{scan_start.strftime('%Y%m%d_%H%M')}.md"
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(report)
+        
+        elapsed = (datetime.now() - scan_start).total_seconds()
+        logger.info(f"✅ 完成! 耗时 {elapsed:.0f}s, 推荐 {len(recommendations)} 只")
+        return recommendations
+    except Exception as e:
+        logger.error(f"扫描异常: {e}", exc_info=True)
+        return None
+
+
+def _gen_report(recommendations, scan_time):
+    if not recommendations:
+        return "# 今日无推荐"
+    
+    r = f"""# 🎯 A股买入推荐 Top 20
+
+**📅 {scan_time} | 📊 {len(recommendations)} 只**
+
+| # | 代码 | 名称 | 评分 | 现价 | 买入 | 止损 | 涨跌 | 理由 |
+|---|------|------|------|------|------|------|------|------|
+"""
+    for i, s in enumerate(recommendations):
+        name = s.get('name', '')[:4]
+        score = s.get('final_score', 0)
+        star = "⭐" if score >= 55 else ("⭐⭐" if score >= 65 else ("⭐⭐⭐" if score >= 80 else ""))
+        r += f"| {i+1} | {s.get('code')} | {name} | {score}{star} | {s.get('price')} | {s.get('ideal_buy_price')} | {s.get('stop_loss_price')} | {s.get('change_pct',0):+.1f}% | {s.get('ai_reason','')} |\n"
+    
+    r += f"""
+
+---
+⚠️ 以上为AI分析参考，不构成投资建议 | 生成: {scan_time}
+"""
+    return r
+
+
+async def run_closing_push():
+    """收盘飞书推送"""
+    from src.recommendation_store import RecommendationStore
+    store = RecommendationStore()
+    df = store.get_latest(20)
+    if df.empty:
+        logger.warning("无推荐数据")
+        return
+    recs = df.to_dict('records')
+    scan_time = recs[0].get('scan_time', datetime.now().strftime('%Y-%m-%d %H:%M'))
+    report = _gen_report(recs, scan_time)
+    try:
+        notification_manager.send_message(report, title="🎯 今日A股买入推荐")
+        logger.info("飞书推送成功")
+    except Exception as e:
+        logger.error(f"飞书推送失败: {e}")
+Commit changes
+
+步骤 4：替换 Workflow 文件
+进入 .github/workflows/ 目录
+
+点击 daily_stock_analysis.yml
+
+点击 ✏️ 编辑
+
+全选删除，粘贴以下代码：
+
+yaml
+name: 每日股票分析
+
+on:
+  schedule:
+    - cron: '30,0 1,2,3,4,5,6,7 * * 1-5'
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '运行模式'
+        required: true
+        default: 'intraday'
+        type: choice
+        options:
+          - intraday
+          - closing-push
+          - full
+
+concurrency:
+  group: stock-analysis
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: mkdir -p data logs reports
+      - name: 执行分析
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ANSPIRE_API_KEYS: ${{ secrets.ANSPIRE_API_KEYS }}
+          TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          STOCK_LIST: ${{ secrets.STOCK_LIST }}
+          REPORT_TYPE: simple
+          LOG_LEVEL: INFO
+          MAX_WORKERS: '3'
+          REALTIME_SOURCE_PRIORITY: tencent,akshare_sina,efinance
+        run: |
+          MODE="${{ github.event.inputs.mode || 'intraday' }}"
+          echo "🚀 模式: $MODE | ⏰ $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
+          if [ "$MODE" = "closing-push" ]; then
+            python -c "import asyncio; from main import run_closing_push; asyncio.run(run_closing_push())"
+          elif [ "$MODE" = "intraday" ]; then
+            python -c "import asyncio; from main import run_intraday_scan; asyncio.run(run_intraday_scan())"
+          else
+            python main.py
+          fi
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: reports-${{ github.run_number }}
+          path: reports/
+          retention-days: 30
 if __name__ == "__main__":
     sys.exit(main())
