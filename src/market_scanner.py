@@ -1,5 +1,5 @@
 """
-全市场股票扫描器
+全市场股票扫描器 - 优化版
 """
 import pandas as pd
 import numpy as np
@@ -20,20 +20,20 @@ class MarketScanner:
     def fetch_all_stocks(self) -> pd.DataFrame:
         try:
             import akshare as ak
-            logger.info("正在获取全A股实时行情（腾讯接口）...")
+            logger.info("获取全A股行情...")
             for attempt in range(3):
                 try:
                     df = ak.stock_zh_a_spot()
                     if df is not None and not df.empty:
-                        logger.info(f"成功: {len(df)} 只, 列: {list(df.columns)[:10]}")
+                        logger.info(f"成功: {len(df)} 只")
                         self.all_stocks = df
                         return df
                 except Exception as e:
-                    logger.warning(f"第{attempt+1}次失败: {e}")
+                    logger.warning(f"第{attempt+1}次: {e}")
                     time.sleep(5)
             return pd.DataFrame()
         except Exception as e:
-            logger.error(f"获取失败: {e}")
+            logger.error(f"失败: {e}")
             return pd.DataFrame()
 
     def quick_filter(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -41,71 +41,48 @@ class MarketScanner:
             return df
 
         initial = len(df)
-        logger.info(f"快速筛选，原始: {initial} 只")
-        logger.info(f"实际列名: {list(df.columns)}")
+        logger.info(f"筛选前: {initial} 只")
 
-        # 腾讯接口列名（可能是英文）
-        col_map = {
-            'code': 'code', 'name': 'name', 'price': 'price',
-            'changepercent': 'change_pct', 'trade': 'price',
-            'volume': 'volume', 'amount': 'amount',
-            'turnoverratio': 'turnover', 'per': 'pe',
-            'mktcap': 'market_cap',
-        }
-
-        # 先重命名
+        # 重命名
         df = df.rename(columns={
-            'changepercent': 'change_pct',
-            'trade': 'price',
-            'turnoverratio': 'turnover',
-            'per': 'pe',
-            'mktcap': 'market_cap',
+            'changepercent': 'change_pct', 'trade': 'price',
+            'turnoverratio': 'turnover', 'per': 'pe', 'mktcap': 'market_cap',
+            '代码': 'code', '名称': 'name', '最新价': 'price',
+            '涨跌幅': 'change_pct', '成交量': 'volume', '换手率': 'turnover',
         })
 
-        # 检查并补充缺失列
-        if 'code' not in df.columns and '代码' in df.columns:
-            df['code'] = df['代码']
-        if 'name' not in df.columns and '名称' in df.columns:
-            df['name'] = df['名称']
-        if 'price' not in df.columns and '最新价' in df.columns:
-            df['price'] = df['最新价']
-        if 'change_pct' not in df.columns and '涨跌幅' in df.columns:
-            df['change_pct'] = df['涨跌幅']
-        if 'volume' not in df.columns and '成交量' in df.columns:
-            df['volume'] = df['成交量']
-        if 'turnover' not in df.columns and '换手率' in df.columns:
-            df['turnover'] = df['换手率']
-
-        # 没有换手率就跳过这个筛选条件
-        has_turnover = 'turnover' in df.columns
-
-        # 筛选
-        if 'name' in df.columns:
-            df = df[~df['name'].str.contains('ST|退市|N |C ', na=False)]
-
-        if 'volume' in df.columns:
-            df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-            df = df[df['volume'] > 0]
-
-        if 'change_pct' in df.columns:
-            df['change_pct'] = pd.to_numeric(df['change_pct'], errors='coerce')
-            df = df[(df['change_pct'] > -5) & (df['change_pct'] < 15)]
-
-        if has_turnover:
-            df['turnover'] = pd.to_numeric(df['turnover'], errors='coerce')
-            df = df[(df['turnover'] >= 0.3) & (df['turnover'] <= 35)]
-        else:
+        # 确保列存在
+        for col in ['code', 'name', 'price', 'change_pct']:
+            if col not in df.columns:
+                df[col] = 0
+        if 'volume' not in df.columns:
+            df['volume'] = 0
+        if 'turnover' not in df.columns:
             df['turnover'] = 0
 
-        if 'price' in df.columns:
-            df['price'] = pd.to_numeric(df['price'], errors='coerce')
-            df = df[df['price'] >= 3]
+        # 排除 ST
+        df = df[~df['name'].astype(str).str.contains('ST|退市|N |C ', na=False)]
+
+        # 排除停牌
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+        df = df[df['volume'] > 0]
+
+        # 涨跌幅放宽到 -5% ~ +15%
+        df['change_pct'] = pd.to_numeric(df['change_pct'], errors='coerce')
+        df = df[(df['change_pct'] > -5) & (df['change_pct'] < 15)]
+
+        # 换手率放宽到 0.3% ~ 35%
+        df['turnover'] = pd.to_numeric(df['turnover'], errors='coerce')
+        df = df[(df['turnover'] >= 0.3) & (df['turnover'] <= 35)]
+
+        # 价格 > 2 元
+        df['price'] = pd.to_numeric(df['price'], errors='coerce')
+        df = df[df['price'] >= 2]
 
         df['volume_ratio'] = 1.0
-
         df['scan_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.filtered_stocks = df
-        logger.info(f"筛选完成: {initial} -> {len(df)} 只")
+        logger.info(f"筛选后: {len(df)} 只 (剔除{initial-len(df)}只)")
         return df
 
     def get_stock_list(self) -> List[Dict]:
