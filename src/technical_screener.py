@@ -1,5 +1,5 @@
 """
-技术指标计算 - 增强版（修复symbol前缀 + API限流保护）
+技术指标计算 - 增强版（修复symbol前缀 + 详细错误日志）
 """
 import pandas as pd
 import numpy as np
@@ -22,7 +22,7 @@ class TechnicalScreener:
     2. 量价配合确认（7种状态识别）
     3. 综合技术面评分（6维度）
     4. 智能买卖价格计算
-    5. API限流保护
+    5. API限流保护 + 详细错误日志
     """
 
     def __init__(self, max_workers: int = 5):
@@ -59,11 +59,12 @@ class TechnicalScreener:
 
         results = []
         self._first_fail_logged = False
+        self._err_count = 0
+        self._err_printed = 0
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {}
             for i, stock in enumerate(stock_list):
-                # 错开提交时间，避免瞬间大量请求
                 if i > 0 and i % 10 == 0:
                     time.sleep(0.3)
                 futures[executor.submit(self._calc_one, stock)] = stock
@@ -75,18 +76,13 @@ class TechnicalScreener:
                     result = future.result(timeout=30)
                     if result:
                         results.append(result)
-                    elif not self._first_fail_logged:
-                        logger.warning(
-                            f"首个计算失败: {failed_stock.get('code')} {failed_stock.get('name')}"
-                        )
-                        self._first_fail_logged = True
                 except Exception as e:
                     self._err_count += 1
-                    if not self._first_fail_logged:
+                    if self._err_printed < 3:
+                        self._err_printed += 1
                         logger.warning(
-                            f"首个异常: {failed_stock.get('code')} {failed_stock.get('name')} - {e}"
+                            f"线程异常: {failed_stock.get('code')} {failed_stock.get('name')} - {e}"
                         )
-                        self._first_fail_logged = True
 
                 processed = i + 1
                 if processed % 50 == 0 or processed >= total:
@@ -124,7 +120,7 @@ class TechnicalScreener:
         return top
 
     # ============================================================
-    # 私有方法：单只股票计算
+    # 私有方法：单只股票计算（带详细错误日志）
     # ============================================================
 
     def _calc_one(self, stock: Dict) -> Optional[Dict]:
@@ -141,33 +137,36 @@ class TechnicalScreener:
         name = stock.get('name', '未知')
 
         try:
-            # 随机延迟，避免请求过于集中
             time.sleep(random.uniform(0.05, 0.3))
 
-            # 获取历史K线数据
+            # 获取K线数据
             df = self._fetch_kline(code)
             
             if df is None:
-                logger.debug(f"{code} {name} K线数据获取失败")
+                if not self._first_fail_logged:
+                    logger.warning(f"❌ {code} {name}: _fetch_kline 返回 None")
+                    self._first_fail_logged = True
                 return None
             
             if len(df) < 20:
-                logger.debug(f"{code} {name} K线数据不足: {len(df)}条")
+                if not self._first_fail_logged:
+                    logger.warning(f"❌ {code} {name}: K线不足20条 (实际{len(df)}条)")
+                    self._first_fail_logged = True
                 return None
 
-            # 验证数据有效性
-            if '收盘' not in df.columns or '成交量' not in df.columns:
-                logger.debug(f"{code} {name} K线数据缺少必要列: {list(df.columns)}")
+            if '收盘' not in df.columns:
+                if not self._first_fail_logged:
+                    logger.warning(f"❌ {code} {name}: 缺少'收盘'列, 列名={list(df.columns)}")
+                    self._first_fail_logged = True
                 return None
 
             # 提取数据
             close = df['收盘'].values
             high = df['最高'].values if '最高' in df.columns else close
             low = df['最低'].values if '最低' in df.columns else close
-            volume = df['成交量'].values
+            volume = df['成交量'].values if '成交量' in df.columns else np.zeros(len(close))
 
             if len(close) == 0:
-                logger.debug(f"{code} {name} 收盘价数据为空")
                 return None
 
             latest_price = float(stock.get('price', close[-1]))
@@ -234,11 +233,11 @@ class TechnicalScreener:
             self._err_count += 1
             if self._err_printed < 10:
                 self._err_printed += 1
-                logger.warning(f"计算异常 {code} {name}: {type(e).__name__}: {e}")
+                logger.warning(f"💥 计算异常 {code} {name}: {type(e).__name__}: {e}")
             return None
 
     # ============================================================
-    # 私有方法：数据获取
+    # 私有方法：数据获取（带前缀 + 详细日志）
     # ============================================================
 
     def _get_symbol(self, code: str) -> str:
@@ -272,7 +271,7 @@ class TechnicalScreener:
 
     def _fetch_kline(self, code: str) -> Optional[pd.DataFrame]:
         """
-        获取历史K线数据（带重试和限流）
+        获取历史K线数据（带详细错误日志）
         
         Args:
             code: 6位纯数字代码
@@ -287,7 +286,7 @@ class TechnicalScreener:
             end = datetime.now().strftime('%Y%m%d')
             start = (datetime.now() - timedelta(days=180)).strftime('%Y%m%d')
 
-            for attempt in range(3):
+            for attempt in range(2):
                 try:
                     df = ak.stock_zh_a_hist(
                         symbol=symbol,
@@ -298,33 +297,34 @@ class TechnicalScreener:
                     )
 
                     if df is not None and not df.empty:
-                        required_cols = ['收盘', '开盘', '最高', '最低', '成交量']
-                        missing = [c for c in required_cols if c not in df.columns]
-                        if missing:
-                            logger.debug(f"{symbol} K线缺少列: {missing}")
-                            return None
-                        
                         if len(df) >= 20:
                             return df
                         else:
-                            logger.debug(f"{symbol} K线不足20条: {len(df)}条")
+                            if not self._first_fail_logged:
+                                logger.warning(f"⚠ {symbol}: K线不足20条({len(df)}条)")
+                                self._first_fail_logged = True
                             return None
+                    else:
+                        if not self._first_fail_logged:
+                            logger.warning(f"⚠ {symbol}: 返回空数据(None或empty)")
+                            self._first_fail_logged = True
+                        return None
 
                 except Exception as e:
-                    if attempt < 2:
-                        wait = (attempt + 1) * 2 + random.uniform(0, 1)
-                        logger.debug(f"{symbol} 第{attempt+1}次失败，等待{wait:.1f}s: {e}")
-                        time.sleep(wait)
+                    if attempt == 0:
+                        time.sleep(2)
                     else:
-                        logger.debug(f"{symbol} 3次获取均失败: {e}")
+                        if not self._first_fail_logged:
+                            logger.warning(f"⚠ {symbol}: 获取失败 - {type(e).__name__}: {str(e)[:100]}")
+                            self._first_fail_logged = True
 
             return None
 
         except ImportError:
-            logger.error("未安装akshare")
+            logger.error("❌ 未安装akshare库")
             return None
         except Exception as e:
-            logger.debug(f"{code} 获取K线异常: {e}")
+            logger.warning(f"⚠ {code}: _fetch_kline异常 - {e}")
             return None
 
     # ============================================================
