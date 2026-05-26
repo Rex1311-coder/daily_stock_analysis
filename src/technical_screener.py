@@ -1,5 +1,5 @@
 """
-技术指标计算 - 增强版
+技术指标计算 - 增强版（含量价配合确认）
 """
 import pandas as pd
 import numpy as np
@@ -17,10 +17,11 @@ class TechnicalScreener:
     技术指标计算器
     
     功能：
-    1. 批量计算股票技术指标（均线、RSI、MACD、KDJ等）
-    2. 综合技术面评分
-    3. 智能买入/止损价格计算
-    4. 过滤Top股票
+    1. 批量计算股票技术指标（均线、RSI、MACD、KDJ、布林带等）
+    2. 量价配合确认（7种状态识别）
+    3. 综合技术面评分（6维度）
+    4. 智能买卖价格计算（买入价、三档止盈、止损）
+    5. 过滤Top股票
     """
 
     def __init__(self, max_workers: int = 10):
@@ -67,7 +68,6 @@ class TechnicalScreener:
                 except Exception:
                     pass
 
-                # 进度报告
                 processed = i + 1
                 if processed % 50 == 0 or processed >= total:
                     logger.info(
@@ -95,21 +95,21 @@ class TechnicalScreener:
         Returns:
             Top股票列表
         """
-        # 过滤有效且有评分的
         valid = [
             s for s in stocks
             if s and 'technical_score' in s and s['technical_score'] >= min_score
         ]
 
-        # 按技术评分降序
         valid.sort(key=lambda x: x['technical_score'], reverse=True)
 
         top = valid[:top_n]
-        logger.info(
-            f"技术Top{top_n}: {len(top)}只 "
-            f"(最高{top[0]['technical_score']}分 最低{top[-1]['technical_score']}分)"
-            if top else "技术Top: 无"
-        )
+        if top:
+            logger.info(
+                f"技术Top{top_n}: {len(top)}只 "
+                f"(最高{top[0]['technical_score']}分 最低{top[-1]['technical_score']}分)"
+            )
+        else:
+            logger.info("技术Top: 无")
 
         return top
 
@@ -143,26 +143,31 @@ class TechnicalScreener:
             volume = df['成交量'].values
 
             latest_price = float(stock.get('price', close[-1]))
+            change_pct = float(stock.get('change_pct', 0))
 
             # 计算各项指标
             indicators = {}
+            indicators['change_pct'] = change_pct
             indicators.update(self._calc_ma(close))
             indicators.update(self._calc_rsi(close))
             indicators.update(self._calc_macd(close))
             indicators.update(self._calc_kdj(high, low, close))
             indicators.update(self._calc_bollinger(close))
-            indicators.update(self._calc_volume_metrics(volume, latest_price))
+            indicators.update(self._calc_volume_metrics(volume))
             indicators.update(self._calc_price_position(latest_price, close))
 
-            # 综合技术评分
+            # 综合技术评分（含量价配合）
             technical_score = self._calc_technical_score(indicators, latest_price)
 
             # 计算买卖价格
-            buy_price, stop_loss = self._calc_trade_prices(
+            buy_price, stop_loss, target1, target2, target3 = self._calc_trade_prices(
                 indicators, latest_price
             )
 
-            # 补充所有必需字段（AI分析需要）
+            # 量价状态描述
+            vol_price_status = self._get_volume_price_status(indicators)
+
+            # 补充所有必需字段
             stock.update({
                 # 均线
                 'ma5': indicators.get('ma5', latest_price),
@@ -194,13 +199,18 @@ class TechnicalScreener:
                 'dist_from_ma20': indicators.get('dist_ma20', 0),
                 'is_bullish': indicators.get('is_bullish', False),
 
+                # 量价状态
+                'vol_price_status': vol_price_status,
+
                 # 评分
                 'technical_score': technical_score,
 
-                # 交易参考（会被AI覆盖，这里作为默认值）
+                # 交易参考
                 'ideal_buy_price': buy_price,
                 'stop_loss_price': stop_loss,
-                'target_price': round(latest_price * 1.1, 2),
+                'target1': target1,
+                'target2': target2,
+                'target3': target3,
             })
 
             return stock
@@ -217,15 +227,7 @@ class TechnicalScreener:
     # ============================================================
 
     def _fetch_kline(self, code: str) -> Optional[pd.DataFrame]:
-        """
-        获取历史K线数据
-        
-        Args:
-            code: 6位股票代码
-            
-        Returns:
-            K线DataFrame，失败返回None
-        """
+        """获取历史K线数据"""
         try:
             import akshare as ak
 
@@ -277,10 +279,10 @@ class TechnicalScreener:
         else:
             result['ma60'] = result.get('ma20', close[-1])
 
-        # 均线排列
         ma5 = result.get('ma5', close[-1])
         ma10 = result.get('ma10', close[-1])
         ma20 = result.get('ma20', close[-1])
+        ma60 = result.get('ma60', close[-1])
         result['is_bullish'] = ma5 > ma10 > ma20
 
         return result
@@ -316,7 +318,6 @@ class TechnicalScreener:
         if n < 35:
             return result
 
-        # 计算EMA
         ema12 = self._ema(close, 12)
         ema26 = self._ema(close, 26)
 
@@ -339,7 +340,6 @@ class TechnicalScreener:
         if length < n:
             return result
 
-        # 取最近n天
         recent_close = close[-n:]
         recent_high = high[-n:]
         recent_low = low[-n:]
@@ -352,7 +352,6 @@ class TechnicalScreener:
 
         rsv = (recent_close[-1] - lowest) / (highest - lowest) * 100
 
-        # 简化计算：使用默认前值50
         k = 2/3 * 50 + 1/3 * rsv
         d = 2/3 * 50 + 1/3 * k
         j = 3 * k - 2 * d
@@ -383,8 +382,7 @@ class TechnicalScreener:
 
         return result
 
-    def _calc_volume_metrics(self, volume: np.ndarray,
-                             latest_price: float) -> Dict:
+    def _calc_volume_metrics(self, volume: np.ndarray) -> Dict:
         """计算成交量相关指标"""
         result = {}
         n = len(volume)
@@ -409,6 +407,21 @@ class TechnicalScreener:
         result = {}
 
         n = len(close)
+
+        # 乖离率
+        if n >= 5:
+            ma5 = np.mean(close[-5:])
+            result['dist_ma5'] = round((latest_price - ma5) / ma5 * 100, 1) if ma5 > 0 else 0
+        else:
+            result['dist_ma5'] = 0
+
+        if n >= 20:
+            ma20 = np.mean(close[-20:])
+            result['dist_ma20'] = round((latest_price - ma20) / ma20 * 100, 1) if ma20 > 0 else 0
+        else:
+            result['dist_ma20'] = 0
+
+        # 60日位置
         if n >= 60:
             high_60 = np.max(close[-60:])
             low_60 = np.min(close[-60:])
@@ -422,114 +435,205 @@ class TechnicalScreener:
         return result
 
     # ============================================================
+    # 私有方法：量价状态判断
+    # ============================================================
+
+    def _get_volume_price_status(self, indicators: Dict) -> str:
+        """
+        判断量价配合状态
+        
+        Returns:
+            状态描述字符串
+        """
+        change_pct = indicators.get('change_pct', 0)
+        vol_ratio = indicators.get('vol_ratio', 1)
+
+        if change_pct > 1 and vol_ratio > 1.5:
+            return "放量上涨 ✅"
+        elif change_pct > 0.5 and vol_ratio > 1.2:
+            return "温和放量上涨"
+        elif change_pct > 1 and vol_ratio < 0.8:
+            return "缩量上涨 ⚠诱多"
+        elif change_pct < -1 and vol_ratio > 1.5:
+            return "放量下跌 ⚠危险"
+        elif change_pct < 0 and vol_ratio < 0.8:
+            return "缩量下跌 正常调整"
+        elif abs(change_pct) < 0.5 and vol_ratio > 2:
+            return "放量滞涨 ⚠出货"
+        elif abs(change_pct) < 0.5 and vol_ratio < 0.5:
+            return "缩量横盘"
+        else:
+            return "量价正常"
+
+    # ============================================================
     # 私有方法：评分与价格
     # ============================================================
 
     def _calc_technical_score(self, indicators: Dict,
                               latest_price: float) -> int:
         """
-        综合技术面评分 (0-100)
+        综合技术面评分 (0-100) - 增强版（含量价配合）
         
         评分维度：
-        - 均线形态 (0-30分)
-        - RSI指标 (0-20分)
-        - MACD指标 (0-20分)
-        - 成交量 (0-15分)
+        - 均线形态 (0-25分)
+        - RSI指标 (0-15分)
+        - MACD指标 (0-15分)
+        - 量价配合 (0-20分) ← 核心维度
         - 价格位置 (0-15分)
+        - 上涨潜力 (0-10分)
         """
         score = 0
 
-        # 1. 均线形态 (30分)
+        # ========== 1. 均线形态 (25分) ==========
         ma5 = indicators.get('ma5', latest_price)
         ma10 = indicators.get('ma10', latest_price)
         ma20 = indicators.get('ma20', latest_price)
         ma60 = indicators.get('ma60', latest_price)
 
-        if ma5 > ma10 > ma20:
+        if ma5 > ma10 > ma20 > ma60:
+            score += 25  # 完全多头排列
+        elif ma5 > ma10 > ma20:
             score += 20  # 多头排列
-            if ma20 > ma60:
-                score += 10  # 中长期也多头
         elif ma5 > ma20 and ma10 > ma20:
-            score += 15  # 短期偏多
+            score += 14  # 短期偏多
         elif ma5 < ma10 < ma20:
             score += 0   # 空头排列
         else:
             score += 8   # 震荡
 
-        # 2. RSI (20分)
+        # ========== 2. RSI (15分) ==========
         rsi = indicators.get('rsi', 50)
-        if 30 <= rsi <= 70:
-            score += 20  # 健康区间
-        elif 40 <= rsi <= 60:
-            score += 15  # 中性偏强
+        if 40 <= rsi <= 60:
+            score += 15  # 最佳买入区
+        elif 30 <= rsi <= 70:
+            score += 12  # 健康区间
         elif rsi > 70:
-            score += 8   # 超买
+            score += 6   # 超买
         elif rsi < 30:
-            score += 5   # 超卖
+            score += 8   # 超卖（可能反弹）
         else:
-            score += 10
+            score += 8
 
-        # 3. MACD (20分)
+        # ========== 3. MACD (15分) ==========
         macd = indicators.get('macd', 0)
         macd_signal = indicators.get('macd_signal', 0)
         macd_hist = indicators.get('macd_hist', 0)
 
-        if macd > macd_signal and macd > 0:
-            score += 20  # 金叉且在零轴上方
+        if macd > 0 and macd > macd_signal and macd_hist > 0:
+            score += 15  # 零轴上金叉+红柱
+        elif macd > 0 and macd > macd_signal:
+            score += 12  # 零轴上金叉
         elif macd > macd_signal:
-            score += 15  # 金叉
+            score += 10  # 金叉
         elif macd > 0:
-            score += 10  # 零轴上方
+            score += 7   # 零轴上方
         else:
-            score += 5   # 弱势
+            score += 3   # 弱势
 
-        # 4. 成交量 (15分)
+        # ========== 4. 量价配合 (20分) ← 核心 ==========
+        change_pct = indicators.get('change_pct', 0)
         vol_ratio = indicators.get('vol_ratio', 1)
-        if 0.8 <= vol_ratio <= 2.0:
-            score += 15  # 量能正常
-        elif 2.0 < vol_ratio <= 3.0:
-            score += 10  # 温和放量
-        elif vol_ratio > 3.0:
-            score += 5   # 异常放量
-        else:
-            score += 8   # 缩量
+        turnover = indicators.get('turnover', 0)
 
-        # 5. 价格位置 (15分)
+        # 4.1 放量上涨（最佳）
+        if change_pct > 1 and vol_ratio > 1.5:
+            score += 20
+        # 4.2 温和放量上涨（很好）
+        elif change_pct > 0.5 and vol_ratio > 1.2:
+            score += 16
+        # 4.3 缩量上涨（警惕，可能诱多）
+        elif change_pct > 1 and vol_ratio < 0.8:
+            score += 6
+        # 4.4 放量下跌（危险）
+        elif change_pct < -1 and vol_ratio > 1.5:
+            score += 2
+        # 4.5 缩量下跌（正常调整）
+        elif change_pct < 0 and vol_ratio < 0.8:
+            score += 12
+        # 4.6 放量滞涨（出货信号）
+        elif abs(change_pct) < 0.5 and vol_ratio > 2:
+            score += 3
+        # 4.7 正常量价
+        else:
+            score += 12
+
+        # 换手率健康度调整
+        if 1 <= turnover <= 8:
+            pass  # 健康，不调整
+        elif turnover > 15:
+            score -= 5  # 换手过高
+        elif 0 < turnover < 0.5:
+            score -= 3  # 换手过低
+
+        # ========== 5. 价格位置 (15分) ==========
         dist_ma20 = indicators.get('dist_ma20', 0)
-        if 0 <= dist_ma20 <= 5:
-            score += 15  # 贴近MA20，安全
-        elif 5 < dist_ma20 <= 10:
-            score += 10  # 略高但可接受
-        elif dist_ma20 < 0:
-            score += 8   # 低于MA20
+        if 0 <= dist_ma20 <= 3:
+            score += 15  # 贴近MA20，最佳买点
+        elif 3 < dist_ma20 <= 5:
+            score += 12  # 略高但可接受
+        elif -3 <= dist_ma20 < 0:
+            score += 10  # 略低于MA20，可能支撑
+        elif dist_ma20 < -5:
+            score += 5   # 远离MA20下方，弱势
         else:
-            score += 5   # 乖离过大
+            score += 6   # 乖离过大
 
-        return min(100, score)
+        # ========== 6. 上涨潜力 (10分) ==========
+        boll_upper = indicators.get('boll_upper', latest_price * 1.1)
+        upside_potential = (boll_upper - latest_price) / latest_price * 100
+
+        if upside_potential > 15:
+            score += 10
+        elif upside_potential > 10:
+            score += 8
+        elif upside_potential > 5:
+            score += 6
+        elif upside_potential > 3:
+            score += 4
+        else:
+            score += 2
+
+        return min(100, max(0, score))
 
     def _calc_trade_prices(self, indicators: Dict,
                            latest_price: float) -> tuple:
         """
-        计算理想买入价和止损价
+        计算交易价格（买入、止损、三档目标）
         
         Returns:
-            (买入价, 止损价)
+            (买入价, 止损价, 目标1, 目标2, 目标3)
         """
         ma20 = indicators.get('ma20', latest_price)
         ma60 = indicators.get('ma60', latest_price)
+        boll_upper = indicators.get('boll_upper', latest_price * 1.1)
         boll_lower = indicators.get('boll_lower', latest_price * 0.95)
 
-        # 理想买入价：MA20和布林下轨之间
-        buy_price = round((ma20 + boll_lower) / 2, 2)
+        # 买入价：MA20附近或布林下轨上方
+        buy_price = round((ma20 * 0.98 + boll_lower) / 2, 2)
         if buy_price > latest_price:
             buy_price = round(latest_price * 0.98, 2)
+        buy_price = max(buy_price, round(latest_price * 0.95, 2))
 
-        # 止损价：MA60下方3%或布林下轨
-        stop_loss = round(min(ma60 * 0.97, boll_lower * 0.98), 2)
-        if stop_loss >= latest_price * 0.95:
-            stop_loss = round(latest_price * 0.93, 2)
+        # 止损价：多重保护
+        stop1 = round(ma60 * 0.98, 2) if ma60 > 0 else round(latest_price * 0.93, 2)
+        stop2 = round(boll_lower * 0.99, 2)
+        stop3 = round(latest_price * 0.93, 2)
+        stop_loss = min(stop1, stop2, stop3)
+        stop_loss = min(stop_loss, round(latest_price * 0.95, 2))
 
-        return buy_price, stop_loss
+        # 三档目标价
+        target1 = round(boll_upper, 2)
+        if target1 < latest_price * 1.03:
+            target1 = round(latest_price * 1.05, 2)
+
+        band_width = boll_upper - boll_lower if boll_lower > 0 else latest_price * 0.1
+        target2 = round(boll_upper + band_width * 0.3, 2)
+        if target2 < latest_price * 1.06:
+            target2 = round(latest_price * 1.08, 2)
+
+        target3 = round(latest_price * 1.12, 2)
+
+        return buy_price, stop_loss, target1, target2, target3
 
     # ============================================================
     # 工具方法
