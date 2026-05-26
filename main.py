@@ -1008,7 +1008,7 @@ def main() -> int:
 # ============================================================
 
 async def run_intraday_scan():
-    """盘中实时扫描模式 - 优化版（增加二次筛选以适配GitHub Actions时限）"""
+    """盘中实时扫描模式 - 完整版（含大盘环境评估）"""
     import sys
     import os
     from datetime import datetime
@@ -1049,19 +1049,15 @@ async def run_intraday_scan():
             logger.warning("⚠️ 筛选后无股票")
             return None
         
-        # ==========================================
-        # [2.5/5] 二次筛选 - 缩小到活跃股票（关键优化）
-        # ==========================================
+        # [2.5/5] 二次筛选 - 缩小到活跃股票
         logger.info("[2.5/5] 二次筛选 - 仅保留活跃股票...")
         
-        # 策略1：筛选涨跌幅 > 1.5% 或 < -2% 的股票
         active_stocks = [
             s for s in stock_list 
             if abs(s.get('change_pct', 0)) > 1.5
         ]
         logger.info(f"策略1 (涨跌幅>1.5%): {len(active_stocks)} 只")
         
-        # 如果不够100只，放宽条件
         if len(active_stocks) < 100:
             active_stocks = [
                 s for s in stock_list 
@@ -1069,7 +1065,6 @@ async def run_intraday_scan():
             ]
             logger.info(f"策略2 (涨跌幅>0.5%): {len(active_stocks)} 只")
         
-        # 如果还不够，取成交量最大的前300只
         if len(active_stocks) < 50:
             logger.info(f"活跃股票不足50只，切换为成交量Top300")
             active_stocks = sorted(
@@ -1078,7 +1073,6 @@ async def run_intraday_scan():
                 reverse=True
             )[:300]
         
-        # 按涨跌幅绝对值排序，取前500
         if len(active_stocks) > 500:
             active_stocks.sort(
                 key=lambda x: abs(x.get('change_pct', 0)), 
@@ -1088,7 +1082,7 @@ async def run_intraday_scan():
         
         logger.info(f"✅ 二次筛选后: {len(active_stocks)} 只（进入技术分析）")
         
-        # [3/5] 技术指标（只计算活跃股票）
+        # [3/5] 技术指标
         logger.info(f"[3/5] 技术指标计算 ({len(active_stocks)} 只)...")
         screener = TechnicalScreener(max_workers=10)
         stocks = screener.batch_calculate(active_stocks)
@@ -1099,7 +1093,7 @@ async def run_intraday_scan():
             logger.warning("⚠️ 技术筛选无结果")
             return None
         
-        # [4/5] AI分析
+        # [4/5] AI分析（含大盘环境评估）
         logger.info(f"[4/5] AI深度分析 ({len(top_stocks)} 只)...")
         ranker = AIRanker(None, max_workers=5)
         analyzed = ranker.batch_analyze(top_stocks)
@@ -1134,6 +1128,109 @@ async def run_intraday_scan():
         import traceback
         traceback.print_exc()
         return None
+
+    # 大盘环境信息
+    market_info = ""
+    total_position = 0
+    if recommendations:
+        first = recommendations[0]
+        market_adj = first.get('market_adjust', 0)
+        total_position = sum(s.get('position_pct', 0) for s in recommendations)
+        
+        market_level = ""
+        if market_adj >= 5:
+            market_level = "🟢 强势"
+        elif market_adj >= 0:
+            market_level = "🟡 中性"
+        else:
+            market_level = "🔴 弱势"
+        
+        market_info = (
+            f"\n### 📊 大盘环境\n"
+            f"- 状态: {market_level} | 评分调整: {market_adj:+.0f}分\n"
+            f"- 建议总仓位: **{total_position:.0f}%**\n"
+        )
+
+    r = f"""# 🎯 A股买入推荐 Top 20
+
+**📅 {scan_time} | 📊 {len(recommendations)} 只**
+{market_info}
+| # | 代码 | 名称 | 评分 | 现价 | 买入 | 止损 | 目标1 | 目标2 | 目标3 | 空间 | 仓位 | 理由 |
+|---|------|------|------|------|------|------|------|------|------|------|------|------|
+"""
+    for i, s in enumerate(recommendations):
+        name = s.get('name', '')[:4]
+        score = s.get('final_score', 0)
+        
+        # 星级
+        if score >= 80:
+            star = "⭐⭐⭐"
+        elif score >= 65:
+            star = "⭐⭐"
+        elif score >= 55:
+            star = "⭐"
+        else:
+            star = ""
+        
+        upside = s.get('upside_pct', 0)
+        pos = s.get('position_pct', 0)
+        reason = s.get('ai_reason', '')
+        if len(reason) > 12:
+            reason = reason[:12] + '..'
+        
+        # 操作建议emoji
+        action = s.get('ai_action', 'hold')
+        action_emoji = "🟢" if action == 'buy' else ("🟡" if action == 'hold' else "🔴")
+        
+        r += (
+            f"| {i+1} | {s.get('code')} | {name} | {score}{star} | "
+            f"{s.get('price')} | {s.get('ideal_buy_price')} | {s.get('stop_loss_price')} | "
+            f"{s.get('target1')} | {s.get('target2')} | {s.get('target3')} | "
+            f"{upside:.0f}% | {pos:.0f}% | {action_emoji}{reason} |\n"
+        )
+
+    # 统计
+    buy_count = sum(1 for s in recommendations if s.get('ai_action') == 'buy')
+    hold_count = sum(1 for s in recommendations if s.get('ai_action') == 'hold')
+    avg_upside = sum(s.get('upside_pct', 0) for s in recommendations) / max(len(recommendations), 1)
+    avg_score = sum(s.get('final_score', 0) for s in recommendations) / max(len(recommendations), 1)
+
+    r += f"""
+
+---
+### 📈 统计概览
+| 指标 | 数值 |
+|------|------|
+| 推荐总数 | {len(recommendations)} 只 |
+| 买入信号 | {buy_count} 只 |
+| 持有信号 | {hold_count} 只 |
+| 平均评分 | {avg_score:.1f} 分 |
+| 平均上涨空间 | {avg_upside:.1f}% |
+| 建议总仓位 | {total_position:.0f}% |
+
+### 💰 止盈策略
+| 目标 | 涨幅 | 卖出比例 | 说明 |
+|------|------|----------|------|
+| 目标1（保守） | 3-5% | 30% | 到达第一压力位，锁定基础利润 |
+| 目标2（中性） | 5-10% | 40% | 突破后趋势延续，利润大头落袋 |
+| 目标3（激进） | 10-15%+ | 30% | 趋势加速，吃完整波行情 |
+
+### 🛡️ 风控规则
+- **止损**：跌破止损价立即离场，不犹豫
+- **移动止盈**：盈利>5%后，止损上移至成本价
+- **时间止损**：持有3天不涨，减半仓
+- **大盘联动**：大盘跌>1%，所有仓位减半
+
+---
+⚠️ 以上为AI分析参考，不构成投资建议 | 生成: {scan_time}
+"""
+    return r
+        
+    except Exception as e:
+        logger.error(f"❌ 扫描异常: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 def _gen_report(recommendations, scan_time):
     if not recommendations:
         return "# 今日无推荐"
@@ -1162,15 +1259,32 @@ def _gen_report(recommendations, scan_time):
 async def run_closing_push():
     """收盘飞书推送"""
     from src.recommendation_store import RecommendationStore
+    from src.market_environment import MarketEnvironment
+    
     store = RecommendationStore()
     df = store.get_latest(20)
     if df.empty:
         logger.warning("无推荐数据")
         return
+    
     recs = df.to_dict('records')
     scan_time = recs[0].get('scan_time', datetime.now().strftime('%Y-%m-%d %H:%M'))
-    report = _gen_report(recs, scan_time)
+    
+    # 补充大盘环境
     try:
+        env = MarketEnvironment()
+        market = env.assess()
+        for rec in recs:
+            rec['market_adjust'] = market.get('adjust_factor', 0)
+            rec['position_pct'] = round(market.get('position_advice', 0.5) / len(recs) * 100, 1)
+    except:
+        pass
+    
+    report = _gen_report(recs, scan_time)
+    
+    try:
+        from src.services.notification_service import NotificationService
+        notification_manager = NotificationService()
         notification_manager.send_message(report, title="🎯 今日A股买入推荐")
         logger.info("飞书推送成功")
     except Exception as e:
