@@ -1008,7 +1008,7 @@ def main() -> int:
 # ============================================================
 
 async def run_intraday_scan():
-    """盘中实时扫描模式"""
+    """盘中实时扫描模式 - 优化版（增加二次筛选以适配GitHub Actions时限）"""
     import sys
     import os
     from datetime import datetime
@@ -1049,10 +1049,49 @@ async def run_intraday_scan():
             logger.warning("⚠️ 筛选后无股票")
             return None
         
-        # [3/5] 技术指标
-        logger.info(f"[3/5] 技术指标计算 ({len(stock_list)} 只)...")
+        # ==========================================
+        # [2.5/5] 二次筛选 - 缩小到活跃股票（关键优化）
+        # ==========================================
+        logger.info("[2.5/5] 二次筛选 - 仅保留活跃股票...")
+        
+        # 策略1：筛选涨跌幅 > 1.5% 或 < -2% 的股票
+        active_stocks = [
+            s for s in stock_list 
+            if abs(s.get('change_pct', 0)) > 1.5
+        ]
+        logger.info(f"策略1 (涨跌幅>1.5%): {len(active_stocks)} 只")
+        
+        # 如果不够100只，放宽条件
+        if len(active_stocks) < 100:
+            active_stocks = [
+                s for s in stock_list 
+                if abs(s.get('change_pct', 0)) > 0.5
+            ]
+            logger.info(f"策略2 (涨跌幅>0.5%): {len(active_stocks)} 只")
+        
+        # 如果还不够，取成交量最大的前300只
+        if len(active_stocks) < 50:
+            logger.info(f"活跃股票不足50只，切换为成交量Top300")
+            active_stocks = sorted(
+                stock_list, 
+                key=lambda x: x.get('volume', 0), 
+                reverse=True
+            )[:300]
+        
+        # 按涨跌幅绝对值排序，取前500
+        if len(active_stocks) > 500:
+            active_stocks.sort(
+                key=lambda x: abs(x.get('change_pct', 0)), 
+                reverse=True
+            )
+            active_stocks = active_stocks[:500]
+        
+        logger.info(f"✅ 二次筛选后: {len(active_stocks)} 只（进入技术分析）")
+        
+        # [3/5] 技术指标（只计算活跃股票）
+        logger.info(f"[3/5] 技术指标计算 ({len(active_stocks)} 只)...")
         screener = TechnicalScreener(max_workers=10)
-        stocks = screener.batch_calculate(stock_list)
+        stocks = screener.batch_calculate(active_stocks)
         top_stocks = screener.filter_top_stocks(stocks, top_n=50)
         logger.info(f"✅ 技术Top50: {len(top_stocks)} 只")
         
@@ -1062,7 +1101,7 @@ async def run_intraday_scan():
         
         # [4/5] AI分析
         logger.info(f"[4/5] AI深度分析 ({len(top_stocks)} 只)...")
-        ranker = AIRanker(None, max_workers=10)
+        ranker = AIRanker(None, max_workers=5)
         analyzed = ranker.batch_analyze(top_stocks)
         recommendations = ranker.get_top_recommendations(analyzed, top_n=20)
         logger.info(f"✅ 推荐: {len(recommendations)} 只")
@@ -1095,7 +1134,6 @@ async def run_intraday_scan():
         import traceback
         traceback.print_exc()
         return None
-
 def _gen_report(recommendations, scan_time):
     if not recommendations:
         return "# 今日无推荐"
