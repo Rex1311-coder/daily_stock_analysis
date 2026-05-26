@@ -283,8 +283,9 @@ class AIRanker:
     def _build_prompt(self, details: List[str]) -> str:
         """构建AI分析提示词"""
         context = "\n\n".join(details)
+        n = len(details)
 
-        prompt = f"""你是A股短线交易分析专家。请对以下{len(details)}只股票逐一分析。
+        prompt = f"""你是A股短线交易分析专家。请对以下{n}只股票逐一分析。
 
 {context}
 
@@ -318,18 +319,133 @@ class AIRanker:
 
 严格返回JSON数组，不要Markdown代码块：
 
-```json
-[
-  {{
-    "id": 1,
-    "trend": "多头",
-    "action": "buy",
-    "score": 78,
-    "confidence": 85,
-    "risk": "低",
-    "reason": "多头排列+MACD金叉，回踩MA10支撑，可介入",
-    "buy_price": 15.50,
-    "stop_loss": 14.80,
-    "target": 17.00
-  }}
-]
+[{{"id":1,"trend":"多头","action":"buy","score":78,"confidence":85,"risk":"低","reason":"多头排列+MACD金叉，回踩MA10支撑，可介入","buy_price":15.50,"stop_loss":14.80,"target":17.00}}]
+
+**只返回JSON数组，不要任何其他文字。**"""
+
+        return prompt
+
+    def _call_model(self, prompt: str, max_retries: int = 2) -> Optional[str]:
+        """调用AI模型（带重试）"""
+        import litellm
+
+        for attempt in range(max_retries + 1):
+            try:
+                resp = litellm.completion(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=800,
+                    temperature=0.3,
+                    timeout=60,
+                )
+
+                if resp and resp.choices:
+                    return resp.choices[0].message.content
+
+            except Exception as e:
+                if attempt < max_retries:
+                    wait = 2 ** attempt
+                    logger.debug(f"AI调用重试({attempt+1}/{max_retries+1})，等待{wait}s: {e}")
+                    time.sleep(wait)
+                else:
+                    logger.warning(f"AI调用失败: {e}")
+
+        return None
+
+    def _parse_response(self, resp_text: str, stocks: List[Dict]) -> List[Dict]:
+        """解析AI返回的JSON"""
+        # 清理文本
+        resp_text = resp_text.strip()
+
+        # 去掉Markdown代码块
+        if resp_text.startswith('```'):
+            lines = resp_text.split('\n')
+            if len(lines) > 1:
+                resp_text = '\n'.join(lines[1:])
+            else:
+                resp_text = resp_text[3:]
+        if resp_text.endswith('```'):
+            resp_text = resp_text[:-3]
+
+        # 提取JSON数组
+        match = re.search(r'\[.*\]', resp_text, re.DOTALL)
+        if not match:
+            logger.debug("未找到JSON数组，使用降级方案")
+            return self._fallback_score(stocks)
+
+        try:
+            ai_results = json.loads(match.group())
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON解析失败: {e}")
+            return self._fallback_score(stocks)
+
+        # 映射结果到股票
+        for item in ai_results:
+            idx = item.get('id', 0) - 1
+            if 0 <= idx < len(stocks):
+                self._apply_ai_result(stocks[idx], item)
+
+        return stocks
+
+    def _apply_ai_result(self, stock: Dict, ai: Dict) -> None:
+        """将AI分析结果应用到股票数据"""
+        ai_score = ai.get('score', 50)
+        ai_confidence = ai.get('confidence', 50)
+        tech_score = stock.get('technical_score', 50)
+        trend = ai.get('trend', '震荡')
+        risk = ai.get('risk', '中')
+
+        # 综合评分：技术30% + AI 50% + 置信度20%
+        final_score = round(tech_score * 0.3 + ai_score * 0.5 + ai_confidence * 0.2, 1)
+
+        # 趋势调整
+        if trend == '多头':
+            final_score = min(100, final_score + 5)
+        elif trend == '空头':
+            final_score = max(0, final_score - 10)
+
+        # 风险调整
+        if risk == '高':
+            final_score = max(0, final_score - 5)
+        elif risk == '低':
+            final_score = min(100, final_score + 3)
+
+        # 更新字段
+        stock.update({
+            'ai_trend': trend,
+            'ai_action': ai.get('action', 'hold'),
+            'ai_score': ai_score,
+            'ai_confidence': ai_confidence,
+            'ai_reason': ai.get('reason', ''),
+            'risk_level': risk,
+            'final_score': final_score,
+            'ideal_buy_price': ai.get('buy_price', stock.get('price', 0)),
+            'stop_loss_price': ai.get('stop_loss', round(stock.get('price', 0) * 0.95, 2)),
+            'target_price': ai.get('target', round(stock.get('price', 0) * 1.1, 2)),
+        })
+
+    def _fallback_score(self, stocks: List[Dict]) -> List[Dict]:
+        """
+        降级方案：纯技术指标评分
+        
+        当AI不可用时使用，确保系统仍能产出结果。
+        """
+        logger.info("使用技术指标降级评分")
+
+        for s in stocks:
+            tech_score = s.get('technical_score', 50)
+
+            s.update({
+                'ai_trend': '震荡',
+                'ai_action': 'hold',
+                'ai_score': 50,
+                'ai_confidence': 30,
+                'ai_reason': 'AI暂不可用，参考技术指标',
+                'risk_level': '中',
+                'final_score': tech_score,
+                'ideal_buy_price': s.get('price', 0),
+                'stop_loss_price': round(s.get('price', 0) * 0.95, 2),
+                'target_price': round(s.get('price', 0) * 1.1, 2),
+            })
+
+        return stocks
