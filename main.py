@@ -872,7 +872,7 @@ async def run_intraday_scan():
         
         # [3/5] 技术指标
         logger.info(f"[3/5] 技术指标计算 ({len(active_stocks)} 只)...")
-        screener = TechnicalScreener(max_workers=10)
+        screener = TechnicalScreener(max_workers=3)
         stocks = screener.batch_calculate(active_stocks)
         top_stocks = screener.filter_top_stocks(stocks, top_n=50)
         logger.info(f"✅ 技术Top50: {len(top_stocks)} 只")
