@@ -1,5 +1,5 @@
 """
-技术指标计算 - 增强版（含API限流保护 + 详细日志）
+技术指标计算 - 增强版（修复symbol前缀 + API限流保护）
 """
 import pandas as pd
 import numpy as np
@@ -65,14 +65,14 @@ class TechnicalScreener:
             for i, stock in enumerate(stock_list):
                 # 错开提交时间，避免瞬间大量请求
                 if i > 0 and i % 10 == 0:
-                    time.sleep(0.5)
+                    time.sleep(0.3)
                 futures[executor.submit(self._calc_one, stock)] = stock
 
             for i, future in enumerate(as_completed(futures)):
                 failed_stock = futures[future]
                 
                 try:
-                    result = future.result(timeout=30)  # 增加超时
+                    result = future.result(timeout=30)
                     if result:
                         results.append(result)
                     elif not self._first_fail_logged:
@@ -142,7 +142,7 @@ class TechnicalScreener:
 
         try:
             # 随机延迟，避免请求过于集中
-            time.sleep(random.uniform(0.1, 0.5))
+            time.sleep(random.uniform(0.05, 0.3))
 
             # 获取历史K线数据
             df = self._fetch_kline(code)
@@ -166,7 +166,6 @@ class TechnicalScreener:
             low = df['最低'].values if '最低' in df.columns else close
             volume = df['成交量'].values
 
-            # 验证数据非空
             if len(close) == 0:
                 logger.debug(f"{code} {name} 收盘价数据为空")
                 return None
@@ -242,18 +241,56 @@ class TechnicalScreener:
     # 私有方法：数据获取
     # ============================================================
 
+    def _get_symbol(self, code: str) -> str:
+        """
+        根据股票代码自动判断市场并添加前缀
+        
+        Args:
+            code: 6位纯数字代码
+            
+        Returns:
+            带前缀的symbol，如 sh600519
+        """
+        code = str(code).zfill(6)
+        
+        if code.startswith('6'):
+            return f"sh{code}"
+        elif code.startswith('9'):
+            return f"sh{code}"
+        elif code.startswith('0'):
+            return f"sz{code}"
+        elif code.startswith('3'):
+            return f"sz{code}"
+        elif code.startswith('2'):
+            return f"sz{code}"
+        elif code.startswith('4'):
+            return f"bj{code}"
+        elif code.startswith('8'):
+            return f"sh{code}"
+        else:
+            return f"sh{code}"
+
     def _fetch_kline(self, code: str) -> Optional[pd.DataFrame]:
-        """获取历史K线数据（带重试和限流）"""
+        """
+        获取历史K线数据（带重试和限流）
+        
+        Args:
+            code: 6位纯数字代码
+            
+        Returns:
+            K线DataFrame，失败返回None
+        """
         try:
             import akshare as ak
 
+            symbol = self._get_symbol(code)
             end = datetime.now().strftime('%Y%m%d')
             start = (datetime.now() - timedelta(days=180)).strftime('%Y%m%d')
 
             for attempt in range(3):
                 try:
                     df = ak.stock_zh_a_hist(
-                        symbol=code,
+                        symbol=symbol,
                         period="daily",
                         start_date=start,
                         end_date=end,
@@ -261,25 +298,25 @@ class TechnicalScreener:
                     )
 
                     if df is not None and not df.empty:
-                        # 验证必要列
                         required_cols = ['收盘', '开盘', '最高', '最低', '成交量']
                         missing = [c for c in required_cols if c not in df.columns]
                         if missing:
-                            logger.debug(f"{code} K线缺少列: {missing}")
+                            logger.debug(f"{symbol} K线缺少列: {missing}")
                             return None
                         
                         if len(df) >= 20:
                             return df
                         else:
+                            logger.debug(f"{symbol} K线不足20条: {len(df)}条")
                             return None
 
                 except Exception as e:
                     if attempt < 2:
                         wait = (attempt + 1) * 2 + random.uniform(0, 1)
-                        logger.debug(f"{code} 第{attempt+1}次获取失败，等待{wait:.1f}s: {e}")
+                        logger.debug(f"{symbol} 第{attempt+1}次失败，等待{wait:.1f}s: {e}")
                         time.sleep(wait)
                     else:
-                        logger.debug(f"{code} 3次获取均失败")
+                        logger.debug(f"{symbol} 3次获取均失败: {e}")
 
             return None
 
@@ -291,7 +328,7 @@ class TechnicalScreener:
             return None
 
     # ============================================================
-    # 私有方法：指标计算（保持不变）
+    # 私有方法：指标计算
     # ============================================================
 
     def _calc_ma(self, close: np.ndarray) -> Dict:
