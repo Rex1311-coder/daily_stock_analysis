@@ -1045,7 +1045,8 @@ async def run_closing_push():
 # ============================================================
 
 if __name__ == "__main__":
-    import asyncio
+    import subprocess, sys
+    subprocess.run([sys.executable, "test_debug.py"])
     
     # 检查是否指定了盘中扫描模式
     mode = os.getenv("MODE", "")
