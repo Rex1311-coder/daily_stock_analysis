@@ -129,12 +129,7 @@ def _bootstrap_environment() -> None:
 
 
 def _setup_bootstrap_logging(debug: bool = False) -> None:
-    """Initialize stderr-only logging before config is loaded.
-
-    File handlers are deferred until ``config.log_dir`` is known (via the
-    subsequent ``setup_logging()`` call) so that healthy runs never create
-    log files in a hard-coded directory.
-    """
+    """Initialize stderr-only logging before config is loaded."""
     level = logging.DEBUG if debug else logging.INFO
     root = logging.getLogger()
     root.setLevel(level)
@@ -157,30 +152,21 @@ def _setup_runtime_logging(log_dir: str, debug: bool = False) -> bool:
         return True
     except OSError as exc:
         logger.warning(
-            "文件日志初始化失败，已降级为控制台日志输出；日志目录 %r 当前不可写或不可创建: %s。"
-            "官方 Docker 镜像启动入口会自动修复默认挂载目录权限；若仍失败，"
-            "请检查是否使用了 --user、只读挂载、rootless Docker 或 NFS 等限制写入的环境。",
-            log_dir,
-            exc,
+            "文件日志初始化失败，已降级为控制台日志输出；日志目录 %r 当前不可写或不可创建: %s。",
+            log_dir, exc,
         )
         return False
 
 
 def _get_stock_analysis_pipeline():
-    """Lazily import StockAnalysisPipeline for external consumers.
-
-    Also ensures env/proxy bootstrap has run so that API / bot consumers
-    that never call ``main()`` still get ``USE_PROXY`` applied.
-    """
+    """Lazily import StockAnalysisPipeline for external consumers."""
     _bootstrap_environment()
     from src.core.pipeline import StockAnalysisPipeline as _Pipeline
-
     return _Pipeline
 
 
 class _LazyPipelineDescriptor:
     """Descriptor that resolves StockAnalysisPipeline on first attribute access."""
-
     _resolved = None
 
     def __set_name__(self, owner, name):
@@ -240,155 +226,35 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --stocks 600519,000001  # 指定分析特定股票
   python main.py --no-notify        # 不发送推送通知
   python main.py --check-notify     # 检查通知配置，不发送通知
-  python main.py --single-notify    # 启用单股推送模式（每分析完一只立即推送）
+  python main.py --single-notify    # 启用单股推送模式
   python main.py --schedule         # 启用定时任务模式
   python main.py --market-review    # 仅运行大盘复盘
         '''
     )
 
-    parser.add_argument(
-        '--debug',
-        action='store_true',
-        help='启用调试模式，输出详细日志'
-    )
-
-    parser.add_argument(
-        '--dry-run',
-        action='store_true',
-        help='仅获取数据，不进行 AI 分析'
-    )
-
-    parser.add_argument(
-        '--stocks',
-        type=str,
-        help='指定要分析的股票代码，逗号分隔（覆盖配置文件）'
-    )
-
-    parser.add_argument(
-        '--no-notify',
-        action='store_true',
-        help='不发送推送通知'
-    )
-
-    parser.add_argument(
-        '--check-notify',
-        action='store_true',
-        help='只读检查通知渠道配置，不发送通知'
-    )
-
-    parser.add_argument(
-        '--single-notify',
-        action='store_true',
-        help='启用单股推送模式：每分析完一只股票立即推送，而不是汇总推送'
-    )
-
-    parser.add_argument(
-        '--workers',
-        type=int,
-        default=None,
-        help='并发线程数（默认使用配置值）'
-    )
-
-    parser.add_argument(
-        '--schedule',
-        action='store_true',
-        help='启用定时任务模式，每日定时执行'
-    )
-
-    parser.add_argument(
-        '--no-run-immediately',
-        action='store_true',
-        help='定时任务启动时不立即执行一次'
-    )
-
-    parser.add_argument(
-        '--market-review',
-        action='store_true',
-        help='仅运行大盘复盘分析'
-    )
-
-    parser.add_argument(
-        '--no-market-review',
-        action='store_true',
-        help='跳过大盘复盘分析'
-    )
-
-    parser.add_argument(
-        '--force-run',
-        action='store_true',
-        help='跳过交易日检查，强制执行全量分析（Issue #373）'
-    )
-
-    parser.add_argument(
-        '--webui',
-        action='store_true',
-        help='启动 Web 管理界面'
-    )
-
-    parser.add_argument(
-        '--webui-only',
-        action='store_true',
-        help='仅启动 Web 服务，不执行自动分析'
-    )
-
-    parser.add_argument(
-        '--serve',
-        action='store_true',
-        help='启动 FastAPI 后端服务（同时执行分析任务）'
-    )
-
-    parser.add_argument(
-        '--serve-only',
-        action='store_true',
-        help='仅启动 FastAPI 后端服务，不自动执行分析'
-    )
-
-    parser.add_argument(
-        '--port',
-        type=int,
-        default=8000,
-        help='FastAPI 服务端口（默认 8000）'
-    )
-
-    parser.add_argument(
-        '--host',
-        type=str,
-        default='0.0.0.0',
-        help='FastAPI 服务监听地址（默认 0.0.0.0）'
-    )
-
-    parser.add_argument(
-        '--no-context-snapshot',
-        action='store_true',
-        help='不保存分析上下文快照'
-    )
-
-    # === Backtest ===
-    parser.add_argument(
-        '--backtest',
-        action='store_true',
-        help='运行回测（对历史分析结果进行评估）'
-    )
-
-    parser.add_argument(
-        '--backtest-code',
-        type=str,
-        default=None,
-        help='仅回测指定股票代码'
-    )
-
-    parser.add_argument(
-        '--backtest-days',
-        type=int,
-        default=None,
-        help='回测评估窗口（交易日数，默认使用配置）'
-    )
-
-    parser.add_argument(
-        '--backtest-force',
-        action='store_true',
-        help='强制回测（即使已有回测结果也重新计算）'
-    )
+    parser.add_argument('--debug', action='store_true', help='启用调试模式')
+    parser.add_argument('--dry-run', action='store_true', help='仅获取数据，不进行 AI 分析')
+    parser.add_argument('--stocks', type=str, help='指定要分析的股票代码，逗号分隔')
+    parser.add_argument('--no-notify', action='store_true', help='不发送推送通知')
+    parser.add_argument('--check-notify', action='store_true', help='只读检查通知渠道配置')
+    parser.add_argument('--single-notify', action='store_true', help='启用单股推送模式')
+    parser.add_argument('--workers', type=int, default=None, help='并发线程数')
+    parser.add_argument('--schedule', action='store_true', help='启用定时任务模式')
+    parser.add_argument('--no-run-immediately', action='store_true', help='定时任务启动时不立即执行')
+    parser.add_argument('--market-review', action='store_true', help='仅运行大盘复盘分析')
+    parser.add_argument('--no-market-review', action='store_true', help='跳过大盘复盘分析')
+    parser.add_argument('--force-run', action='store_true', help='跳过交易日检查')
+    parser.add_argument('--webui', action='store_true', help='启动 Web 管理界面')
+    parser.add_argument('--webui-only', action='store_true', help='仅启动 Web 服务')
+    parser.add_argument('--serve', action='store_true', help='启动 FastAPI 后端服务')
+    parser.add_argument('--serve-only', action='store_true', help='仅启动 FastAPI 后端服务')
+    parser.add_argument('--port', type=int, default=8000, help='FastAPI 服务端口')
+    parser.add_argument('--host', type=str, default='0.0.0.0', help='FastAPI 服务监听地址')
+    parser.add_argument('--no-context-snapshot', action='store_true', help='不保存分析上下文快照')
+    parser.add_argument('--backtest', action='store_true', help='运行回测')
+    parser.add_argument('--backtest-code', type=str, default=None, help='仅回测指定股票')
+    parser.add_argument('--backtest-days', type=int, default=None, help='回测评估窗口')
+    parser.add_argument('--backtest-force', action='store_true', help='强制回测')
 
     return parser.parse_args()
 
@@ -398,15 +264,6 @@ def _compute_trading_day_filter(
     args: argparse.Namespace,
     stock_codes: List[str],
 ) -> Tuple[List[str], Optional[str], bool]:
-    """
-    Compute filtered stock list and effective market review region (Issue #373).
-
-    Returns:
-        (filtered_codes, effective_region, should_skip_all)
-        - effective_region None = use config default (check disabled)
-        - effective_region '' = all relevant markets closed, skip market review
-        - should_skip_all: skip entire run when no stocks and no market review to run
-    """
     force_run = getattr(args, 'force_run', False)
     if force_run or not getattr(config, 'trading_day_check_enabled', True):
         return (stock_codes, None, False)
@@ -461,41 +318,28 @@ def run_full_analysis(
     args: argparse.Namespace,
     stock_codes: Optional[List[str]] = None
 ):
-    """
-    执行完整的分析流程（个股 + 大盘复盘）
-
-    这是定时任务调用的主函数
-    """
-    # Import pipeline modules outside the broad try/except so that import-time
-    # failures propagate to the caller instead of being silently swallowed.
     from src.core.market_review import run_market_review
     from src.core.pipeline import StockAnalysisPipeline
 
     try:
-        # Issue #529: Hot-reload STOCK_LIST from .env on each scheduled run
         if stock_codes is None:
             config.refresh_stock_list()
 
-        # Issue #373: Trading day filter (per-stock, per-market)
         effective_codes = stock_codes if stock_codes is not None else config.stock_list
         filtered_codes, effective_region, should_skip = _compute_trading_day_filter(
             config, args, effective_codes
         )
         if should_skip:
-            logger.info(
-                "今日所有相关市场均为非交易日，跳过执行。可使用 --force-run 强制执行。"
-            )
+            logger.info("今日所有相关市场均为非交易日，跳过执行。可使用 --force-run 强制执行。")
             return
         if set(filtered_codes) != set(effective_codes):
             skipped = set(effective_codes) - set(filtered_codes)
             logger.info("今日休市股票已跳过: %s", skipped)
         stock_codes = filtered_codes
 
-        # 命令行参数 --single-notify 覆盖配置（#55）
         if getattr(args, 'single_notify', False):
             config.single_stock_notify = True
 
-        # Issue #190: 个股与大盘复盘合并推送
         merge_notification = (
             getattr(config, 'merge_email_notification', False)
             and config.market_review_enabled
@@ -503,7 +347,6 @@ def run_full_analysis(
             and not config.single_stock_notify
         )
 
-        # 创建调度器
         save_context_snapshot = None
         if getattr(args, 'no_context_snapshot', False):
             save_context_snapshot = False
@@ -516,7 +359,6 @@ def run_full_analysis(
             save_context_snapshot=save_context_snapshot
         )
 
-        # 1. 运行个股分析
         results = pipeline.run(
             stock_codes=stock_codes,
             dry_run=args.dry_run,
@@ -524,7 +366,6 @@ def run_full_analysis(
             merge_notification=merge_notification
         )
 
-        # Issue #128: 分析间隔 - 在个股分析和大盘分析之间添加延迟
         analysis_delay = getattr(config, 'analysis_delay', 0)
         if (
             analysis_delay > 0
@@ -535,7 +376,6 @@ def run_full_analysis(
             logger.info(f"等待 {analysis_delay} 秒后执行大盘复盘（避免API限流）...")
             time.sleep(analysis_delay)
 
-        # 2. 运行大盘复盘（如果启用且不是仅个股模式）
         market_report = ""
         if (
             config.market_review_enabled
@@ -552,11 +392,9 @@ def run_full_analysis(
                 merge_notification=merge_notification,
                 override_region=effective_region,
             )
-            # 如果有结果，赋值给 market_report 用于后续飞书文档生成
             if review_result:
                 market_report = review_result
 
-        # Issue #190: 合并推送（个股+大盘复盘）
         if merge_notification and (results or market_report) and not args.no_notify:
             parts = []
             if market_report:
@@ -575,7 +413,6 @@ def run_full_analysis(
                     else:
                         logger.warning("合并推送失败")
 
-        # 输出摘要
         if results:
             logger.info("\n===== 分析结果摘要 =====")
             for r in sorted(results, key=lambda x: x.sentiment_score, reverse=True):
@@ -587,53 +424,37 @@ def run_full_analysis(
 
         logger.info("\n任务执行完成")
 
-        # === 新增：生成飞书云文档 ===
         try:
             from src.feishu_doc import FeishuDocManager
-
             feishu_doc = FeishuDocManager()
             if feishu_doc.is_configured() and (results or market_report):
                 logger.info("正在创建飞书云文档...")
-
-                # 1. 准备标题 "01-01 13:01大盘复盘"
                 tz_cn = timezone(timedelta(hours=8))
                 now = datetime.now(tz_cn)
                 doc_title = f"{now.strftime('%Y-%m-%d %H:%M')} 大盘复盘"
-
-                # 2. 准备内容 (拼接个股分析和大盘复盘)
                 full_content = ""
-
-                # 添加大盘复盘内容（如果有）
                 if market_report:
                     full_content += f"# 📈 大盘复盘\n\n{market_report}\n\n---\n\n"
-
-                # 添加个股决策仪表盘（使用 NotificationService 生成，按 report_type 分支）
                 if results:
                     dashboard_content = pipeline.notifier.generate_aggregate_report(
                         results,
                         getattr(config, 'report_type', 'simple'),
                     )
                     full_content += f"# 🚀 个股决策仪表盘\n\n{dashboard_content}"
-
-                # 3. 创建文档
                 doc_url = feishu_doc.create_daily_doc(doc_title, full_content)
                 if doc_url:
                     logger.info(f"飞书云文档创建成功: {doc_url}")
-                    # 可选：将文档链接也推送到群里
                     if not args.no_notify:
                         pipeline.notifier.send(
                             f"[{now.strftime('%Y-%m-%d %H:%M')}] 复盘文档创建成功: {doc_url}",
                             route_type="report",
                         )
-
         except Exception as e:
             logger.error(f"飞书文档生成失败: {e}")
 
-        # === Auto backtest ===
         try:
             if getattr(config, 'backtest_enabled', False):
                 from src.services.backtest_service import BacktestService
-
                 logger.info("开始自动回测...")
                 service = BacktestService()
                 stats = service.run_backtest(
@@ -654,14 +475,6 @@ def run_full_analysis(
 
 
 def start_api_server(host: str, port: int, config: Config) -> None:
-    """
-    在后台线程启动 FastAPI 服务
-
-    Args:
-        host: 监听地址
-        port: 监听端口
-        config: 配置对象
-    """
     import threading
     import uvicorn
 
@@ -681,14 +494,11 @@ def start_api_server(host: str, port: int, config: Config) -> None:
 
 
 def _is_truthy_env(var_name: str, default: str = "true") -> bool:
-    """Parse common truthy / falsy environment values."""
     value = os.getenv(var_name, default).strip().lower()
     return value not in {"0", "false", "no", "off"}
 
 
 def start_bot_stream_clients(config: Config) -> None:
-    """Start bot stream clients when enabled in config."""
-    # 启动钉钉 Stream 客户端
     if config.dingtalk_stream_enabled:
         try:
             from bot.platforms import start_dingtalk_stream_background, DINGTALK_STREAM_AVAILABLE
@@ -699,11 +509,9 @@ def start_bot_stream_clients(config: Config) -> None:
                     logger.warning("[Main] Dingtalk Stream client failed to start.")
             else:
                 logger.warning("[Main] Dingtalk Stream enabled but SDK is missing.")
-                logger.warning("[Main] Run: pip install dingtalk-stream")
         except Exception as exc:
             logger.error(f"[Main] Failed to start Dingtalk Stream client: {exc}")
 
-    # 启动飞书 Stream 客户端
     if getattr(config, 'feishu_stream_enabled', False):
         try:
             from bot.platforms import start_feishu_stream_background, FEISHU_SDK_AVAILABLE
@@ -714,45 +522,32 @@ def start_bot_stream_clients(config: Config) -> None:
                     logger.warning("[Main] Feishu Stream client failed to start.")
             else:
                 logger.warning("[Main] Feishu Stream enabled but SDK is missing.")
-                logger.warning("[Main] Run: pip install lark-oapi")
         except Exception as exc:
             logger.error(f"[Main] Failed to start Feishu Stream client: {exc}")
 
 
 def _resolve_scheduled_stock_codes(stock_codes: Optional[List[str]]) -> Optional[List[str]]:
-    """Scheduled runs should always read the latest persisted watchlist."""
     if stock_codes is not None:
         logger.warning(
-            "定时模式下检测到 --stocks 参数；计划执行将忽略启动时股票快照，并在每次运行前重新读取最新的 STOCK_LIST。"
+            "定时模式下检测到 --stocks 参数；计划执行将忽略启动时股票快照。"
         )
     return None
 
 
 def _reload_runtime_config() -> Config:
-    """Reload config from the latest persisted `.env` values for scheduled runs."""
     _reload_env_file_values_preserving_overrides()
     Config.reset_instance()
     return get_config()
 
 
 def _build_schedule_time_provider(default_schedule_time: str):
-    """Read the latest schedule time directly from the active config file.
-
-    Fallback order:
-    1. Process-level env override (set before launch) → honour it.
-    2. Persisted config file value (written by WebUI) → use it.
-    3. Documented system default ``"18:00"`` → always fall back here so
-       that clearing SCHEDULE_TIME in WebUI correctly resets the schedule.
-    """
     from src.core.config_manager import ConfigManager
-
     _SYSTEM_DEFAULT_SCHEDULE_TIME = "18:00"
     manager = ConfigManager()
 
     def _provider() -> str:
         if "SCHEDULE_TIME" in _INITIAL_PROCESS_ENV:
             return os.getenv("SCHEDULE_TIME", default_schedule_time)
-
         config_map = manager.read_config_map()
         schedule_time = (config_map.get("SCHEDULE_TIME", "") or "").strip()
         if schedule_time:
@@ -760,7 +555,6 @@ def _build_schedule_time_provider(default_schedule_time: str):
         return _SYSTEM_DEFAULT_SCHEDULE_TIME
 
     return _provider
-
 
 def main() -> int:
     """
@@ -894,9 +688,6 @@ def main() -> int:
             from src.core.market_review_runtime import build_market_review_runtime
 
             # Issue #373: Trading day check for market-review-only mode.
-            # Do NOT use _compute_trading_day_filter here: that helper checks
-            # config.market_review_enabled, which would wrongly block an
-            # explicit --market-review invocation when the flag is disabled.
             effective_region = None
             if not getattr(args, 'force_run', False) and getattr(config, 'trading_day_check_enabled', True):
                 from src.core.trading_calendar import get_open_markets_today, compute_effective_region as _compute_region
@@ -927,9 +718,6 @@ def main() -> int:
             logger.info("模式: 定时任务")
             logger.info(f"每日执行时间: {config.schedule_time}")
 
-            # Determine whether to run immediately:
-            # Command line arg --no-run-immediately overrides config if present.
-            # Otherwise use config (defaults to True).
             should_run_immediately = config.schedule_run_immediately
             if getattr(args, 'no_run_immediately', False):
                 should_run_immediately = False
@@ -1129,6 +917,12 @@ async def run_intraday_scan():
         traceback.print_exc()
         return None
 
+
+def _gen_report(recommendations, scan_time):
+    """生成推荐报告（含大盘环境和仓位建议）"""
+    if not recommendations:
+        return "# 今日无推荐"
+
     # 大盘环境信息
     market_info = ""
     total_position = 0
@@ -1225,63 +1019,18 @@ async def run_intraday_scan():
 ⚠️ 以上为AI分析参考，不构成投资建议 | 生成: {scan_time}
 """
     return r
-        
-    except Exception as e:
-        logger.error(f"❌ 扫描异常: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-def _gen_report(recommendations, scan_time):
-    if not recommendations:
-        return "# 今日无推荐"
-    
-    r = f"""# 🎯 A股买入推荐 Top 20
-
-**📅 {scan_time} | 📊 {len(recommendations)} 只**
-
-| # | 代码 | 名称 | 评分 | 现价 | 买入 | 止损 | 涨跌 | 理由 |
-|---|------|------|------|------|------|------|------|------|
-"""
-    for i, s in enumerate(recommendations):
-        name = s.get('name', '')[:4]
-        score = s.get('final_score', 0)
-        star = "⭐" if score >= 55 else ("⭐⭐" if score >= 65 else ("⭐⭐⭐" if score >= 80 else ""))
-        r += f"| {i+1} | {s.get('code')} | {name} | {score}{star} | {s.get('price')} | {s.get('ideal_buy_price')} | {s.get('stop_loss_price')} | {s.get('change_pct',0):+.1f}% | {s.get('ai_reason','')} |\n"
-    
-    r += f"""
-
----
-⚠️ 以上为AI分析参考，不构成投资建议 | 生成: {scan_time}
-"""
-    return r
-
 
 async def run_closing_push():
     """收盘飞书推送"""
     from src.recommendation_store import RecommendationStore
-    from src.market_environment import MarketEnvironment
-    
     store = RecommendationStore()
     df = store.get_latest(20)
     if df.empty:
         logger.warning("无推荐数据")
         return
-    
     recs = df.to_dict('records')
     scan_time = recs[0].get('scan_time', datetime.now().strftime('%Y-%m-%d %H:%M'))
-    
-    # 补充大盘环境
-    try:
-        env = MarketEnvironment()
-        market = env.assess()
-        for rec in recs:
-            rec['market_adjust'] = market.get('adjust_factor', 0)
-            rec['position_pct'] = round(market.get('position_advice', 0.5) / len(recs) * 100, 1)
-    except:
-        pass
-    
     report = _gen_report(recs, scan_time)
-    
     try:
         from src.services.notification_service import NotificationService
         notification_manager = NotificationService()
@@ -1289,3 +1038,23 @@ async def run_closing_push():
         logger.info("飞书推送成功")
     except Exception as e:
         logger.error(f"飞书推送失败: {e}")
+
+
+# ============================================================
+# 入口点
+# ============================================================
+
+if __name__ == "__main__":
+    import asyncio
+    
+    # 检查是否指定了盘中扫描模式
+    mode = os.getenv("MODE", "")
+    
+    if mode == "intraday":
+        print(f"🚀 模式: intraday | ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        asyncio.run(run_intraday_scan())
+    elif mode == "closing_push":
+        print(f"📤 模式: closing_push | ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        asyncio.run(run_closing_push())
+    else:
+        sys.exit(main())
