@@ -861,18 +861,18 @@ async def run_intraday_scan():
                 reverse=True
             )[:300]
         
-        if len(active_stocks) > 500:
+        if len(active_stocks) > 200:
             active_stocks.sort(
                 key=lambda x: abs(x.get('change_pct', 0)), 
                 reverse=True
             )
-            active_stocks = active_stocks[:500]
+            active_stocks = active_stocks[:200]
         
         logger.info(f"✅ 二次筛选后: {len(active_stocks)} 只（进入技术分析）")
         
         # [3/5] 技术指标
         logger.info(f"[3/5] 技术指标计算 ({len(active_stocks)} 只)...")
-        screener = TechnicalScreener(max_workers=3)
+        screener = TechnicalScreener(max_workers=1)
         stocks = screener.batch_calculate(active_stocks)
         top_stocks = screener.filter_top_stocks(stocks, top_n=50)
         logger.info(f"✅ 技术Top50: {len(top_stocks)} 只")
