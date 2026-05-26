@@ -2,7 +2,7 @@
 import logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -30,14 +30,14 @@ for symbol, name in test_cases:
             adjust="qfq"
         )
         if df is not None and not df.empty:
-            print(f"✅ {symbol} {name}: {len(df)}条数据, 列: {list(df.columns)[:5]}...")
+            print(f"✅ {symbol} {name}: {len(df)}条数据")
         else:
             print(f"❌ {symbol} {name}: 返回空数据")
     except Exception as e:
         print(f"❌ {symbol} {name}: {type(e).__name__}: {str(e)[:100]}")
 
 print("\n" + "=" * 60)
-print("测试2: 通过TechnicalScreener计算技术指标")
+print("测试2: 通过TechnicalScreener计算")
 print("=" * 60)
 
 from src.market_scanner import MarketScanner
@@ -51,13 +51,11 @@ stock_list = scanner.get_stock_list()
 test_stocks = stock_list[:5]
 print(f"\n测试股票 ({len(test_stocks)}只):")
 for s in test_stocks:
-    print(f"  code={s['code']}, name={s['name']}, price={s['price']}")
+    print(f"  {s['code']} {s['name']} price={s['price']}")
 
 screener = TechnicalScreener(max_workers=1)
 results = screener.batch_calculate(test_stocks)
 
 print(f"\n成功: {len(results)} 只")
 for r in results:
-    print(f"  {r['code']} {r['name']}: score={r.get('technical_score')}, ma5={r.get('ma5')}")
-
-print("\n诊断完成")
+    print(f"  {r['code']} {r['name']}: score={r.get('technical_score')}")
