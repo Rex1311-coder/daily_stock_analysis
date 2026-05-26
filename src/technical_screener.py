@@ -286,7 +286,7 @@ class TechnicalScreener:
             end = datetime.now().strftime('%Y%m%d')
             start = (datetime.now() - timedelta(days=180)).strftime('%Y%m%d')
 
-            for attempt in range(2):
+            for attempt in range(3):
                 try:
                     df = ak.stock_zh_a_hist(
                         symbol=symbol,
@@ -312,7 +312,7 @@ class TechnicalScreener:
 
                 except Exception as e:
                     if attempt == 0:
-                        time.sleep(2)
+                        time.sleep((attempt + 1) * 5)
                     else:
                         if not self._first_fail_logged:
                             logger.warning(f"⚠ {symbol}: 获取失败 - {type(e).__name__}: {str(e)[:100]}")
